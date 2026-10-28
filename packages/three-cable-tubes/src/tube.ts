@@ -109,23 +109,60 @@ const size = new THREE.Vector2();
 const sphere = new THREE.Sphere();
 const eye = new THREE.Vector3();
 
-/** the materials made to draw tubes (their copies are not) */
-const sweptSet = new WeakSet<THREE.Material>();
+/**
+ * What a material made to draw tubes reads: the texture of its nodes (one
+ * uniform, which its program keeps: swept again for other nodes, it reads
+ * those without being compiled again), the shader it was swept with, what it
+ * was before (its own `onBeforeCompile` and the key of its program), and the
+ * mesh drawing with it, if any.
+ */
+interface Sweep {
+  nodes: { value: THREE.Texture };
+  key: string;
+  base: THREE.Material['onBeforeCompile'];
+  baseKey: string;
+  mesh: TubeMesh | null;
+}
+const sweeps = new WeakMap<THREE.Material, Sweep>();
 
-/** makes a material draw the tubes of these nodes (any material: its shader only has to start with `void main() {`) */
+/**
+ * Makes a material draw the tubes of these nodes (any material: its shader
+ * only has to start with `void main() {`). It draws the nodes it was last
+ * swept for, whatever mesh draws it: two meshes cannot share it (a `TubeMesh`
+ * draws a copy of a material another one draws).
+ */
 export function swept<T extends THREE.Material>(m: T, nodes: TubeNodes, options: TubeOptions = {}): T {
   const sh = shaderOf(resolve(options));
-  const prev = m.onBeforeCompile.bind(m);
-  const prevKey = m.customProgramCacheKey();
+  let sw = sweeps.get(m);
+  if (!sw) {
+    sw = { nodes: { value: nodes.texture }, key: '', base: m.onBeforeCompile, baseKey: m.customProgramCacheKey(), mesh: null };
+    sweeps.set(m, sw);
+  }
+  sw.nodes.value = nodes.texture;
+  if (sw.key === sh.key) return m;
+  // (swept again with other options: from what it was before, not on top of the first sweep)
+  const { base, baseKey, nodes: tex } = sw;
   m.onBeforeCompile = (s, r) => {
-    prev(s, r);
-    s.uniforms.tubeNodes = { value: nodes.texture };
+    base.call(m, s, r);
+    s.uniforms.tubeNodes = tex;
     s.uniforms.tubeHalfHeight = tubeHalfHeight;
     s.vertexShader = s.vertexShader.replace('void main() {', `${sh.decl}\nvoid main() {\n${sh.main}`);
   };
-  m.customProgramCacheKey = () => `${prevKey}-${sh.key}`;
-  sweptSet.add(m);
+  m.customProgramCacheKey = () => `${baseKey}-${sh.key}`;
+  if (sw.key) m.needsUpdate = true;
+  sw.key = sh.key;
   return m;
+}
+
+/** a copy of a material as it was before it was swept (three.js copies neither its `onBeforeCompile` nor the key of its program) */
+function unswept<T extends THREE.Material>(m: T): T {
+  const c = m.clone() as T;
+  const sw = sweeps.get(m);
+  if (sw) {
+    c.onBeforeCompile = sw.base;
+    c.customProgramCacheKey = () => sw.baseKey;
+  }
+  return c;
 }
 
 /**
@@ -135,6 +172,11 @@ export function swept<T extends THREE.Material>(m: T, nodes: TubeNodes, options:
  * passes put in place of its own (the normals of the reflections and of the
  * ambient occlusion, the mask of the reflections), for which it hands a swept
  * copy of each, made once.
+ *
+ * Its material draws its nodes only: given a material that another mesh
+ * draws (and was not disposed), it draws a copy of it instead (its
+ * `material`), as the material was before it was swept. Once disposed, a mesh
+ * leaves its material free for the next one.
  */
 export class TubeMesh extends THREE.Mesh {
   readonly isTubeMesh = true;
@@ -151,8 +193,12 @@ export class TubeMesh extends THREE.Mesh {
   /** the finest list the nearest node needs from where the camera stands (0, 1, 2), as of the last image */
   level = 0;
   private options: Required<TubeOptions>;
+  /** the material it draws the image with (the one it was given, or its copy) */
+  private main: THREE.Material;
+  /** the copy it made, if it made one */
+  private ownCopy: THREE.Material | null;
 
-  constructor(segments: number, private main: THREE.Material, private nodes: TubeNodes, options: TubeOptions = {}) {
+  constructor(segments: number, material: THREE.Material, private nodes: TubeNodes, options: TubeOptions = {}) {
     const o = resolve(options);
     const geo = new THREE.InstancedBufferGeometry();
     const { rings, lists } = stretch(o.radial, o.sub);
@@ -165,7 +211,12 @@ export class TubeMesh extends THREE.Mesh {
     geo.setAttribute('tubeArc', arc);
     geo.setIndex(lists[0]);
     geo.instanceCount = segments;
+    const taken = sweeps.get(material)?.mesh;
+    const main = taken ? unswept(material) : material;
     super(geo, swept(main, nodes, o));
+    sweeps.get(main)!.mesh = this;
+    this.main = main;
+    this.ownCopy = taken ? main : null;
     this.options = o;
     this.own = main;
     this.lists = lists;
@@ -241,7 +292,7 @@ export class TubeMesh extends THREE.Mesh {
   }
 
   private sweptOf(m: THREE.Material): THREE.Material {
-    if (sweptSet.has(m)) return m;
+    if (sweeps.has(m)) return m;
     let c = this.copies.get(m);
     if (!c) {
       c = swept(m.clone(), this.nodes, this.options);
@@ -258,6 +309,9 @@ export class TubeMesh extends THREE.Mesh {
     this.geometry.index = this.lists[0];
     for (const m of [...this.copies.values(), this.customDepthMaterial!, this.customDistanceMaterial!]) m.dispose();
     this.copies.clear();
+    const sw = sweeps.get(this.main);
+    if (sw?.mesh === this) sw.mesh = null;
+    this.ownCopy?.dispose();
     this.nodes.dispose();
   }
 }

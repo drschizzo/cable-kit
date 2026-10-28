@@ -162,10 +162,17 @@ const sphere = new THREE.Sphere();
 const eye = new THREE.Vector3();
 const size = new THREE.Vector2();
 
+/** the mesh each material draws the tubes of (its `positionNode` reads that mesh's nodes) */
+const drawing = new WeakMap<THREE.NodeMaterial, TubeMesh>();
+
 /**
  * The mesh of the tubes: `segments` instances of the stretch of tube, laid
  * along the cords by lay(). `options.aliases` does not apply here: read
  * `tubeCoord` and `tubeTint`.
+ *
+ * Its material draws its nodes only: given a material that another mesh
+ * draws (and was not disposed), it draws a copy of it instead (its
+ * `material`). Once disposed, a mesh leaves its material free for the next one.
  */
 export class TubeMesh extends THREE.Mesh {
   readonly isTubeMesh = true;
@@ -183,6 +190,9 @@ export class TubeMesh extends THREE.Mesh {
   private options: Required<TubeOptions>;
   /** a shadow is being drawn: its renderObject calls onBeforeRender too, after onBeforeShadow */
   private shadowing = false;
+  /** the material it draws with, and the copy it made of the one it was given, if it made one */
+  private main: THREE.NodeMaterial;
+  private ownCopy: THREE.NodeMaterial | null;
 
   constructor(segments: number, material: THREE.NodeMaterial, private nodes: TubeNodeSource, options: TubeOptions = {}) {
     const o = resolve(options);
@@ -197,13 +207,20 @@ export class TubeMesh extends THREE.Mesh {
     geo.setAttribute('tubeArc', arc);
     geo.setIndex(lists[0]);
     geo.instanceCount = segments;
-    super(geo, material);
+    const taken = drawing.has(material);
+    const main = taken ? material.clone() : material;
+    super(geo, main);
+    drawing.set(main, this);
+    this.main = main;
+    this.ownCopy = taken ? main : null;
     this.options = o;
     this.lists = lists;
     this.seg = seg;
     this.color = color;
     this.arc = arc;
-    material.positionNode = this.sweep();
+    main.positionNode = this.sweep();
+    // (a material another mesh drew before: built again for these nodes)
+    main.needsUpdate = true;
     this.frustumCulled = false;
     // (typed for WebGLRenderer by three's types: here, a WebGPURenderer)
     this.onBeforeRender = (r, _s, c) => {
@@ -321,6 +338,8 @@ export class TubeMesh extends THREE.Mesh {
   /** frees what is its own beyond its geometry and material */
   dispose(): void {
     this.geometry.index = this.lists[0];
+    if (drawing.get(this.main) === this) drawing.delete(this.main);
+    this.ownCopy?.dispose();
     this.nodes.dispose();
   }
 }

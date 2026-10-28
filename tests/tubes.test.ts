@@ -128,4 +128,65 @@ describe('tubes', () => {
     expect([seg.getX(7 * 3), seg.getY(7 * 3), seg.getZ(7 * 3), arc.getZ(7 * 3)]).toEqual([24, 24, 31, 3]);
     mesh.dispose();
   });
+
+  it('its triangles face out of the tube', () => {
+    // the stretch as the shader lays it along x: ring k at x = k, vertex r at the angle
+    // 2πr/radial from side = y towards up = tangent × side = z
+    const mesh = new TubeMesh(1, new THREE.MeshBasicMaterial(), new TubeNodes(2), { radial: 8, sub: 4 });
+    const ring = mesh.geometry.getAttribute('normal'), index = mesh.geometry.index!;
+    const at = (v: number) => {
+      const a = (2 * Math.PI * ring.getY(v)) / 8;
+      return new THREE.Vector3(ring.getX(v), Math.cos(a), Math.sin(a));
+    };
+    for (let t = 0; t < index.count; t += 3) {
+      const [a, b, c] = [0, 1, 2].map((k) => at(index.getX(t + k)));
+      const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a));
+      const out = new THREE.Vector3(0, a.y + b.y + c.y, a.z + b.z + c.z);
+      expect(n.dot(out)).toBeGreaterThan(0);
+    }
+    mesh.dispose();
+  });
+
+  it('a material draws the nodes of one mesh at a time, and is free again once it is disposed', () => {
+    const uniformsOf = (m: THREE.Material) => {
+      const sh = { uniforms: {}, vertexShader: 'void main() {\n}', fragmentShader: '' } as unknown as THREE.WebGLProgramParametersWithUniforms;
+      m.onBeforeCompile(sh, {} as THREE.WebGLRenderer);
+      return { nodes: (sh.uniforms.tubeNodes as THREE.IUniform).value, vertex: sh.vertexShader };
+    };
+    const material = new THREE.MeshStandardMaterial();
+    material.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('void main() {', '// mine\nvoid main() {'); };
+    const a = new TubeNodes(2), b = new TubeNodes(2), c = new TubeNodes(2);
+    const first = new TubeMesh(1, material, a), second = new TubeMesh(1, material, b);
+    // the second one draws a copy, with the material's own additions
+    expect(first.material).toBe(material);
+    expect(second.material).not.toBe(material);
+    expect(uniformsOf(first.material as THREE.Material).nodes).toBe(a.texture);
+    const copy = uniformsOf(second.material as THREE.Material);
+    expect(copy.nodes).toBe(b.texture);
+    expect(copy.vertex).toContain('// mine');
+    // once the first is disposed, the next one draws the material itself, swept once
+    first.dispose();
+    const third = new TubeMesh(1, material, c);
+    expect(third.material).toBe(material);
+    const again = uniformsOf(material);
+    expect(again.nodes).toBe(c.texture);
+    expect(again.vertex.split('uniform highp sampler2D tubeNodes').length).toBe(2);
+    second.dispose();
+    third.dispose();
+  });
+
+  it('on WebGPU too, two meshes do not share a material', () => {
+    const material = new MeshStandardNodeMaterial();
+    const first = new GPU.TubeMesh(1, material, new GPU.TubeNodes(2));
+    const second = new GPU.TubeMesh(1, material, new GPU.TubeNodes(2));
+    expect(first.material).toBe(material);
+    expect(second.material).not.toBe(material);
+    const before = material.positionNode;
+    first.dispose();
+    const third = new GPU.TubeMesh(1, material, new GPU.TubeNodes(2));
+    expect(third.material).toBe(material);
+    expect(material.positionNode).not.toBe(before);
+    second.dispose();
+    third.dispose();
+  });
 });
