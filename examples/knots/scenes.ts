@@ -38,12 +38,6 @@ const ROPE = { radius: 0.01, mass: 0.002, bend: 0.5, segment: 0.02 };
 const PARAMS: Partial<SimParams> = { substeps: 10, margin: 0.003, marginCap: 0.02 };
 const FLOOR: StaticShape = { kind: 'box', min: [-4, -0.2, -4], max: [4, 0, 4] };
 
-/** a tremor of a millimetre or two: a rope hanging dead straight is a case the solver handles badly */
-function shake(p: number[], a = 0.002): number[] {
-  for (let k = 0; k < p.length / 3; k++) { p[3 * k] += a * Math.sin(k * 1.7); p[3 * k + 2] += a * Math.cos(k * 2.3); }
-  return p;
-}
-
 export const KNOTS: Record<string, { name: string; curve: KnotCurve }> = {
   overhand: { name: 'overhand (3₁)', curve: torusKnot(3) },
   eight: { name: 'figure-eight (4₁)', curve: figureEight() },
@@ -102,7 +96,7 @@ export function capstanScene(): Scene {
   const ropes: RopeDef[] = [], statics: StaticShape[] = [FLOOR], labels: { text: string; at: Vec }[] = [];
   const colors = ['#d0452f', '#2f7fd0', '#3aa35a'];
   xs.forEach((x, k) => {
-    ropes.push({ points: shake(wound([x, y, 0], bar + ROPE.radius, k, 0.03, short, long, ROPE.segment)), radius: ROPE.radius, color: colors[k], make: BRAIDED });
+    ropes.push({ points: wound([x, y, 0], bar + ROPE.radius, k, 0.03, short, long, ROPE.segment), radius: ROPE.radius, color: colors[k], make: BRAIDED });
     statics.push({ kind: 'capsule', ax: x, ay: y, az: -0.15, bx: x, by: y, bz: 0.15, r: bar, mu });
     const theta = Math.PI * (1 + 2 * k), grip = Math.exp(mu * theta);
     labels.push({ text: `${k + 0.5} turn${k ? 's' : ''}<br>e<sup>μθ</sup> = ${grip.toFixed(1)} ${grip > long / short ? '>' : '<'} ${(long / short).toFixed(0)}`, at: [x, y + 0.12, 0] });
@@ -125,7 +119,7 @@ export function braidScene(): Scene {
   const ropes = [-1, 0, 1].map((k, c): RopeDef => {
     const p: number[] = [];
     for (let i = 0; i * seg <= len + 1e-9; i++) p.push(k * w * 0.4, top - i * seg, 0);
-    return { points: shake(p, 0.001), radius: R, color: colors[c], make: BRAIDED };
+    return { points: p, radius: R, color: colors[c], make: BRAIDED };
   });
   const xs = [-w, 0, w];
   let ends: number[] = [];
@@ -188,9 +182,9 @@ export function playgroundScene(): Scene {
     return p;
   };
   const ropes: RopeDef[] = [
-    { points: shake(line([-0.6, 1.0, -0.08], [0.55, 0.95, -0.08], ROPE.segment)), radius: ROPE.radius, color: '#d0452f', make: BRAIDED },
-    { points: shake(line([-0.5, 1.15, 0.06], [0.6, 1.1, 0.0], ROPE.segment)), radius: ROPE.radius, color: '#c9a86a', make: LAID },
-    { points: shake(line([-0.55, 1.3, 0.12], [0.5, 1.35, 0.1], ROPE.segment)), radius: 0.008, color: '#2a2d33', make: JACKET },
+    { points: line([-0.6, 1.0, -0.08], [0.55, 0.95, -0.08], ROPE.segment), radius: ROPE.radius, color: '#d0452f', make: BRAIDED },
+    { points: line([-0.5, 1.15, 0.06], [0.6, 1.1, 0.0], ROPE.segment), radius: ROPE.radius, color: '#c9a86a', make: LAID },
+    { points: line([-0.55, 1.3, 0.12], [0.5, 1.35, 0.1], ROPE.segment), radius: 0.008, color: '#2a2d33', make: JACKET },
     { points: openKnot(figureEight(), 0.035, 0.3, [-0.05, ROPE.radius + 0.045, 0.45], ROPE.segment, true), radius: ROPE.radius, color: '#3aa35a', make: BRAIDED },
   ];
   return {

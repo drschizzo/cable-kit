@@ -239,4 +239,34 @@ describe('cable solver', () => {
     };
     expect(go()).toEqual(go());
   });
+
+  it('a rope hanging dead straight from a pin comes to rest', () => {
+    // (straight down, all the tension along one line: carried too far from
+    // substep to substep, it bounced harder and harder, thrown above the pin)
+    const k = CABLES.rope;
+    const sim = new CableSim(k.params);
+    const [s] = sim.build([{ ...k.cable, points: cord([0, 1, 0], [0, 0.05, 0], k.segment) }]);
+    sim.pin(s, 0, 1, 0);
+    let worst = 0;
+    for (let f = 0; f < 180; f++) { sim.step(); worst = Math.max(worst, stretch(sim)); }
+    expect(worst).toBeLessThan(0.02);
+    expect(sim.cables[0].asleep).toBe(true);
+  });
+
+  it('a rope draped over a thick bar stays on it, with many substeps', () => {
+    // (each segment tangent to the bar: tracking its closest point at every
+    // substep rocked it, and the rope crept off)
+    const sim = new CableSim({ substeps: 16, margin: 0.003, marginCap: 0.02 });
+    const r = 0.05, y = 0.9, pts: number[] = [];
+    for (let h = y - 0.4; h < y; h += 0.02) pts.push(-r, h, 0);
+    for (let k = 0; k <= 12; k++) { const th = Math.PI * (1 - k / 12); pts.push(r * Math.cos(th), y + r * Math.sin(th), 0); }
+    for (let h = y - 0.02; h >= y - 0.4; h -= 0.02) pts.push(r, h, 0);
+    sim.build([{ points: pts, radius: 0.01, mass: 0.002, bend: 0.5 }]);
+    sim.setStatics([{ kind: 'capsule', ax: 0, ay: y, az: -0.3, bx: 0, by: y, bz: 0.3, r: 0.04 }]);
+    const ends = () => [sim.x[1], sim.x[3 * (sim.n - 1) + 1]];
+    const before = ends();
+    run(sim, 4);
+    ends().forEach((e, k) => expect(Math.abs(e - before[k])).toBeLessThan(0.02));
+    expect(sim.cables[0].asleep).toBe(true);
+  });
 });
