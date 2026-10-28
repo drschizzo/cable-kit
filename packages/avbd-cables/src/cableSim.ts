@@ -146,7 +146,14 @@ export interface SimParams {
   alphaS: number;
   /** contact multipliers carried to the next substep (×) */
   lamWarm: number;
-  /** stretch multipliers carried to the next substep (×) */
+  /**
+   * stretch multipliers carried to the next substep (×). Each substep adds
+   * k·C to them again, iteration after iteration: carried at 0.8 the tension
+   * was counted twice, and a cord hanging dead straight from a pin bounced
+   * harder and harder (100 % stretch, its end thrown above the pin; slightly
+   * bent, the bounce went out sideways and it settled). At 0.4, none, and a
+   * cord draped over a rod comes to rest twice as soon.
+   */
   lamWarmS: number;
   /**
    * fraction of the sliding velocity of a pushing contact removed per substep,
@@ -211,7 +218,7 @@ export interface SimParams {
 export function defaultSimParams(p: Partial<SimParams> = {}): SimParams {
   return {
     dt: 1 / 60, substeps: 3, refSubsteps: 3, iterations: 6, gravity: -9.81,
-    stretch: 10, kMin: 0.05, kCap: 2, kCapCable: 2, kCapCableHeld: 4, kCapHeld: 8, beta: 2000, gamma: 0.9, alpha: 0.25, alphaS: 0.3, lamWarm: 0.8, lamWarmS: 0.8, contactDamping: 0.3, restFriction: 0.012,
+    stretch: 10, kMin: 0.05, kCap: 2, kCapCable: 2, kCapCableHeld: 4, kCapHeld: 8, beta: 2000, gamma: 0.9, alpha: 0.25, alphaS: 0.3, lamWarm: 0.8, lamWarmS: 0.4, contactDamping: 0.3, restFriction: 0.012,
     muCable: 0.3, muStatic: 0.4, drag: 2.5,
     margin: 0.0015, marginLead: 1.2, marginCap: 0.008, marginStatic: 0.06, maxMove: 0.012,
     handWeight: 0.1, pbdPasses: 4, maxDepen: 0.001, frictionK: 0.3,
@@ -1114,12 +1121,21 @@ export class CableSim {
    * The normal does not turn over: a cord pushed past a bar's axis is still
    * pushed back out the side it came from, not through. The friction anchor
    * shifts with the point, as when a contact is found again (`pushContact`).
+   *
+   * Against a bar, only for a cord drawn by a hand (`firm`, or led by a heavy
+   * target), which slides fast: the others are found again every frame, which
+   * is enough. A segment resting tangent to a thick bar moved its closest
+   * point back and forth at every substep as it rocked a little, shifting the
+   * load from one of its nodes to the other: a cord draped over a bar shook,
+   * more with more substeps (from about 10), and crept off it. (Between two
+   * cords, tracking keeps cords falling across one another apart.)
    */
   private track(): void {
     const x = this.x;
     for (let c = 0; c < this.nc; c++) {
       if (!this.ctrack[c]) continue;
       const a0 = this.ca0[c], b0 = this.cb0[c];
+      if (b0 < 0 && !this.firm[this.cableOf[a0]] && !this.led[this.cableOf[a0]]) continue;
       const sid = this.csh[c];
       const pa = 3 * a0, pb = 3 * this.ca1[c];
       let q0x: number, q0y: number, q0z: number, q1x: number, q1y: number, q1z: number;
