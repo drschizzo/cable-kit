@@ -88,4 +88,17 @@ describe('tubes', () => {
     expect(counts).toEqual([counts[0], counts[0] / 4, counts[0] / 16]);
     mesh.dispose();
   });
+
+  it('the WebGPU mesh also reads nodes the GPU writes, laid out as the CPU writes them', () => {
+    const cpu = new GPU.TubeNodes(1000), gpu = new GPU.GPUTubeNodes(1000);
+    const size = (t: THREE.Texture) => { const im = t.image as { width: number; height: number }; return [im.width, im.height]; };
+    expect(size(gpu.texture)).toEqual(size(cpu.texture));
+    expect(gpu.texture.type).toBe(THREE.FloatType);
+    gpu.box.set(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 1, 1));
+    gpu.radius = 0.001;
+    const material = new MeshStandardNodeMaterial();
+    const mesh = new GPU.TubeMesh(999, material, gpu);
+    expect(material.positionNode).not.toBeNull();
+    mesh.dispose();
+  });
 });
