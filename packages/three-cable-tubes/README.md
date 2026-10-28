@@ -64,7 +64,7 @@ renderer.setAnimationLoop(() => {
 });
 ```
 
-The CPU then does nothing per frame but ask for the compute and the image, however many nodes there are. Compute shaders need WebGPU: this does not run on the WebGL 2 fallback.
+The CPU then does nothing per frame but ask for the compute and the image, however many nodes there are. Write what does not change (often the glow) once, with `storeTubeNodeTint`, rather than every frame, and let neighbouring invocations write neighbouring nodes (one invocation per node rather than per cord): the writes are most of what such a compute shader costs. A `GPUTubeNodes` of millions of nodes widens its texture to stay within WebGPU's default limit of 8192 rows. Compute shaders need WebGPU: this does not run on the WebGL 2 fallback.
 
 ## The API
 

@@ -21,7 +21,7 @@ Then open http://localhost:5173:
 - **grab**: ropes you take and drag with the mouse, held back by a rod and the floor;
 - **falling**: hundreds of ropes falling in a heap, the physics in a Web Worker;
 - **tubes only**: thousands of tubes animated by hand, no physics;
-- **webgpu**: a fibre optic lamp: 16 000 strands whose nodes a compute shader moves every frame, never leaving the GPU, with pulses of light made by a TSL material and a bloom (needs WebGPU).
+- **webgpu**: a fibre optic lamp: 50 000 strands (`?strands=` for more) whose nodes a compute shader moves every frame, never leaving the GPU, with pulses of light made by a TSL material and a bloom (needs WebGPU).
 
 ## In a few lines
 
