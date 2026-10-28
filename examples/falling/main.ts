@@ -1,4 +1,4 @@
-// A hundred ropes falling in a heap. The solver runs in a Web Worker
+// Hundreds of ropes falling in a heap. The solver runs in a Web Worker
 // (`threaded`): the page keeps a mirror of it, sends it the changes and asks
 // for a step every frame, and draws the last positions it got back. Rendering
 // never waits for the physics. Ropes at rest fall asleep and cost nothing.
@@ -10,7 +10,7 @@ import { line, random, stage } from '../common';
 
 class Sim extends threaded(CableSim, () => new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' })) {}
 
-const ROPES = 120, LENGTH = 1.2;
+const ROPES = 300, LENGTH = 1.2;
 const kind = CABLES.rope;
 const { renderer, scene, camera } = stage([0, 0.1, 0]);
 camera.position.set(2.2, 1.7, 2.6);
@@ -19,7 +19,7 @@ camera.position.set(2.2, 1.7, 2.6);
 function ropes(): number[] {
   const r = random(), out: number[] = [];
   for (let c = 0; c < ROPES; c++) {
-    const a = r() * Math.PI, h = 0.1 + c * 0.03, cx = (r() - 0.5) * 2.4, cz = (r() - 0.5) * 2.4;
+    const a = r() * Math.PI, h = 0.1 + c * 0.015, cx = (r() - 0.5) * 1.8, cz = (r() - 0.5) * 1.8;
     const d = [Math.cos(a) * LENGTH / 2, Math.sin(a) * LENGTH / 2];
     out.push(...line([cx - d[0], h, cz - d[1]], [cx + d[0], h, cz + d[1]], kind.segment));
   }

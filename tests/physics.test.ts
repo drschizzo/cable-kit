@@ -211,6 +211,24 @@ describe('cable solver', () => {
     }
   });
 
+  it('a heap of a hundred cords comes to rest', () => {
+    // dropped one above the other, crossed, over 1.6 m: a deep heap, every cord pressing on others
+    const k = CABLES.patchCord;
+    const sim = new CableSim(k.params);
+    let seed = 7;
+    const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const defs = [];
+    for (let c = 0; c < 100; c++) {
+      const a = r() * Math.PI, h = 0.1 + c * 0.03, cx = (r() - 0.5) * 1.6, cz = (r() - 0.5) * 1.6;
+      defs.push({ ...k.cable, points: cord([cx - 0.6 * Math.cos(a), h, cz - 0.6 * Math.sin(a)], [cx + 0.6 * Math.cos(a), h, cz + 0.6 * Math.sin(a)], k.segment) });
+    }
+    sim.build(defs);
+    sim.setStatics([{ kind: 'box', min: [-3, -0.1, -3], max: [3, 0, 3] }]);
+    let asleep = -1;
+    for (let f = 1; f <= 600 && asleep < 0; f++) { sim.step(); if (sim.cables.every((c) => c.asleep)) asleep = f; }
+    expect(asleep).toBeGreaterThan(0);
+  }, 60_000);
+
   it('is deterministic: the same start gives the same positions, bit for bit', () => {
     const go = () => {
       const sim = new CableSim();

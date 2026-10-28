@@ -34,7 +34,8 @@ console.log(sim.x);                          // the nodes, xyz interleaved
 - **Straps.** `addBundle(nodes, r)` keeps the given nodes within `r` of their centre (a strap round several cables); `removeBundle(id)` takes it off.
 - **Pinches.** A pinch keeps the shape a few consecutive nodes have (shape matching, Müller et al. 2005): see `setPinches`, `firmPinch`, `unpinch`.
 - **Ghosts.** A node whose `ghost` is −1 passes through the other cables (never through the static shapes); set a number of frames instead and it becomes solid again where it is clear of them, or pushes them out once they run out.
-- **Sleep.** A cable whose nodes all stay within `P.sleepDist` for `P.sleepTime` falls asleep: its nodes are frozen and act as static geometry for the others, until something awake touches it hard enough. `wakeCable(c)` and `wakeAll()` wake them by hand.
+- **Sleep.** A cable whose nodes all stay within `P.sleepDist` for `P.sleepTime` falls asleep: its nodes are frozen and act as static geometry for the others, until something awake touches it hard enough. `wakeCable(c)` and `wakeAll()` wake them by hand. A heap of hundreds of cables comes to rest in a few seconds.
+- **Contact stiffness.** The penalties of the contacts rise where they are violated, up to a ceiling: `kCapCable` between two cables, `kCap` against static shapes. A cable drawn by a hand (`firm`, or led by a heavy target) gets the stiffer `kCapCableHeld` and `kCapHeld`, so that it does not pass through what it is dragged across.
 - **Moving things by hand.** `moveNodes(start, pos)` puts nodes somewhere else, at rest; `teleport(pos)` does it for every free node.
 
 ## Kinds of cable
@@ -92,7 +93,6 @@ Subclass `CableSim` for what drives your cables (a hand, sockets, channels that 
 
 ## Limits
 
-- Large heaps of cables lying on one another (more than about a hundred long cables on a floor) may keep shivering instead of falling asleep. Smaller heaps, and cables hanging or lying apart, settle.
 - The settings are checked for the three kinds above; other sizes need their own (more substeps and wider margins for thicker cables with longer segments). `npm run presets` in the repository shows how a kind behaves.
 - Static shapes are capsules and axis-aligned boxes.
 - The solver is single-threaded: a worker keeps it off the page's thread, it does not split it.

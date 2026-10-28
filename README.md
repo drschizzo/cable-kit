@@ -19,7 +19,7 @@ npm run dev
 Then open http://localhost:5173:
 
 - **grab**: ropes you take and drag with the mouse, held back by a rod and the floor;
-- **falling**: a hundred ropes falling in a heap, the physics in a Web Worker;
+- **falling**: hundreds of ropes falling in a heap, the physics in a Web Worker;
 - **tubes only**: thousands of tubes animated by hand, no physics;
 - **webgpu**: the tubes on `WebGPURenderer`, and its WebGL 2 fallback.
 
@@ -66,6 +66,7 @@ The packages are not on npm yet. To use them in a project:
 | `npm run build:examples` | the examples, built into `dist/` |
 | `npm run check` | lint, types, tests |
 | `npm run presets` | each kind of cable on a floor, over a rod, in a heap, dragged through the heap |
+| `npm run heap` | a big heap (`N=200 KIND=rope`): every second, cables awake, falling asleep and waking, how much they move |
 | `npm run pack` | builds the packages and lists what their tarballs would hold |
 
 The repository reads the packages from their sources (`src/`, through the `source` export condition); what is published is their `dist/`.

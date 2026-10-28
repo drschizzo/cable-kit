@@ -111,8 +111,18 @@ export interface SimParams {
   /** contact stiffness: starting value and ceiling (× M/h²), growth (× M/h² per metre of violation) */
   kMin: number;
   kCap: number;
-  /** ceiling between two cables: stiffer, so that a cord dragged through others does not pass through them */
+  /**
+   * ceiling between two cables: a contact stiffer than the inertia of a node
+   * over a substep overshoots, and a heap of cables pressing on one another
+   * never stopped shivering (nor fell asleep)
+   */
   kCapCable: number;
+  /**
+   * ceiling between two cables when one of them is drawn (`firm`, or led by a
+   * heavy target: a hand): stiffer, so that a cord dragged through others does
+   * not pass through them
+   */
+  kCapCableHeld: number;
   /**
    * ceiling against the static shapes for the `firm` cords (those a hand
    * draws): a hand pulls harder than anything else, and a cord dragged
@@ -201,7 +211,7 @@ export interface SimParams {
 export function defaultSimParams(p: Partial<SimParams> = {}): SimParams {
   return {
     dt: 1 / 60, substeps: 3, refSubsteps: 3, iterations: 6, gravity: -9.81,
-    stretch: 10, kMin: 0.05, kCap: 2, kCapCable: 4, kCapHeld: 8, beta: 2000, gamma: 0.9, alpha: 0.25, alphaS: 0.3, lamWarm: 0.8, lamWarmS: 0.8, contactDamping: 0.3, restFriction: 0.012,
+    stretch: 10, kMin: 0.05, kCap: 2, kCapCable: 2, kCapCableHeld: 4, kCapHeld: 8, beta: 2000, gamma: 0.9, alpha: 0.25, alphaS: 0.3, lamWarm: 0.8, lamWarmS: 0.8, contactDamping: 0.3, restFriction: 0.012,
     muCable: 0.3, muStatic: 0.4, drag: 2.5,
     margin: 0.0015, marginLead: 1.2, marginCap: 0.008, marginStatic: 0.06, maxMove: 0.012,
     handWeight: 0.1, pbdPasses: 4, maxDepen: 0.001, frictionK: 0.3,
@@ -1516,7 +1526,10 @@ export class CableSim {
     let m = Math.max(this.mass[a0], this.mass[a1]);
     if (b0 >= 0) m = Math.max(m, this.mass[b0], this.mass[b1]);
     const mh2 = m / this.R.hk;
-    const kmax = (b0 >= 0 ? this.P.kCapCable : this.firm[this.cableOf[a0]] ? this.P.kCapHeld : this.P.kCap) * mh2;
+    const ca = this.cableOf[a0];
+    const kmax = (b0 >= 0
+      ? (this.firm[ca] || this.led[ca] || this.firm[this.cableOf[b0]] || this.led[this.cableOf[b0]] ? this.P.kCapCableHeld : this.P.kCapCable)
+      : this.firm[ca] ? this.P.kCapHeld : this.P.kCap) * mh2;
     this.ckmax[c] = kmax;
     this.cmh[c] = mh2;
     const kmin = this.P.kMin * mh2;
