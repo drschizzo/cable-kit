@@ -11,6 +11,8 @@ The solver uses Augmented Vertex Block Descent (Giles, Diaz and Yuksel, SIGGRAPH
 
 ## Examples
 
+**[See them online](https://drschizzo.github.io/cable-kit/)**, or run them yourself:
+
 ```bash
 npm install
 npm run dev
