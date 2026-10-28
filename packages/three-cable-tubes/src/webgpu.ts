@@ -33,8 +33,8 @@ export const tubeTint = varyingProperty('vec3', 'tubeTint');
 
 // (three's TSL types reject the mixes of int and float the shader needs: it is checked when it compiles)
 const {
-  Fn, Loop, abs, attribute, cos, cross, dot, float, instanceIndex, int, ivec2, max, mix, modelViewMatrix, normalLocal, normalize,
-  select, sin, textureLoad, textureStore, uint, vec3, vec4,
+  Fn, Loop, abs, attribute, cameraPosition, cos, cross, dot, float, instanceIndex, int, ivec2, max, mix, modelViewMatrix,
+  modelWorldMatrixInverse, normalLocal, normalize, select, sin, textureLoad, textureStore, uint, vec3, vec4,
 } = TSL as any;
 
 /** what a TubeMesh reads its nodes from: TubeNodes (written by the CPU) or GPUTubeNodes */
@@ -254,13 +254,20 @@ export class TubeMesh extends THREE.Mesh {
       const t = normalize(select(dot(t0, t0).lessThan(1e-14), p2.sub(p0), t0)).toVar();
       const f0 = mix(at(i1.mul(PER).add(1)).xyz, at(i2.mul(PER).add(1)).xyz, u);
       const f1 = f0.sub(t.mul(dot(f0, t)));
-      const side = normalize(cross(t, select(abs(t.y).lessThan(0.9), vec3(0, 1, 0), vec3(1, 0, 0))));
-      const f = select(dot(f1, f1).lessThan(1e-12), side, normalize(f1));
-      const nrm = f.mul(cos(ang)).add(cross(t, f).mul(sin(ang)));
+      const any = normalize(cross(t, select(abs(t.y).lessThan(0.9), vec3(0, 1, 0), vec3(1, 0, 0))));
+      const f = select(dot(f1, f1).lessThan(1e-12), any, normalize(f1));
+      // as thin as that, the ring turns to face the camera (two vertices: a ribbon), so that a tube seen
+      // edge-on does not vanish; its normals lean towards the camera, so that it shades as a round tube
+      const toCam = modelWorldMatrixInverse.mul(vec4(cameraPosition, 1)).xyz.sub(centre);
+      const across = toCam.sub(t.mul(dot(toCam, t)));
+      const facing = step.equal(int(4)).and(dot(across, across).greaterThan(1e-12));
+      const up = select(facing, normalize(across), cross(t, f)), side = select(facing, cross(normalize(across), t), f);
+      const off = side.mul(cos(ang)).add(up.mul(sin(ang)));
+      const nrm = select(step.equal(int(4)), normalize(off.add(up.mul(0.6))), off);
       normalLocal.assign(nrm);
       tubeCoord.assign(vec4(a.x.add(u.mul(a.y)), cos(ang), sin(ang), a.z));
       tubeTint.assign(at(select(u.lessThan(0.5), i1, i2).mul(PER).add(2)).xyz);
-      return centre.add(nrm.mul(end.w));
+      return centre.add(off.mul(end.w));
     })();
   }
 

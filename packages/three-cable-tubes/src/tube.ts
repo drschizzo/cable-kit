@@ -83,8 +83,17 @@ vec4 tubeAt(int k) { return texelFetch(tubeNodes, ivec2(k % ${W}, k / ${W}), 0);
   vec3 tN = mix(tubeAt(${PER} * tI1 + 1).xyz, tubeAt(${PER} * tI2 + 1).xyz, tU);
   tN -= dot(tN, tT) * tT;
   tN = dot(tN, tN) < 1e-12 ? normalize(cross(tT, abs(tT.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))) : normalize(tN);
-  vec3 tubeNormal = tN * cos(tAng) + cross(tT, tN) * sin(tAng);
-  vec3 tubePos = tCentre + tubeNormal * tEnd.w;
+  vec3 tSide = tN, tUp = cross(tT, tN);
+  if (tStep == 4) {
+    // as thin as that, the ring turns to face the camera (two vertices: a ribbon), so that a tube seen
+    // edge-on does not vanish; its normals lean towards the camera, so that it shades as a round tube
+    vec3 tTo = transpose(mat3(modelMatrix)) * (cameraPosition - (modelMatrix * vec4(tCentre, 1.0)).xyz);
+    tTo -= dot(tTo, tT) * tT;
+    if (dot(tTo, tTo) > 1e-12) { tUp = normalize(tTo); tSide = cross(tUp, tT); }
+  }
+  vec3 tOff = tSide * cos(tAng) + tUp * sin(tAng);
+  vec3 tubeNormal = tStep == 4 ? normalize(tOff + tUp * 0.6) : tOff;
+  vec3 tubePos = tCentre + tOff * tEnd.w;
   vec4 tubeCoord = vec4(tubeArc.x + tU * tubeArc.y, cos(tAng), sin(tAng), tubeArc.z);
   vec3 tubeTint = tubeAt(${PER} * (tU < 0.5 ? tI1 : tI2) + 2).rgb;
 #define position tubePos
