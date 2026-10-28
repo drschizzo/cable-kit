@@ -14,11 +14,15 @@
 // cos and sin of its angle round it, the cord's tag) and `tubeTint` are
 // varyings its other nodes may read. The shadows and the passes of the post
 // processing draw the same material, so nothing else needs it.
+//
+// The nodes may also be computed on the GPU, and never leave it: a compute
+// shader writes them into `GPUTubeNodes` with `storeTubeNode`, and the mesh
+// reads them from there (WebGPU only: WebGL 2 has no compute shaders).
 
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import { uniform, varyingProperty } from 'three/tsl';
-import { PER, W, resolve, stretch, type TubeNodes, type TubeOptions } from './shared.js';
+import { PER, W, resolve, stretch, type TubeOptions } from './shared.js';
 
 export { TubeNodes, TubeSync, type CableSource, type TubeOptions } from './shared.js';
 
@@ -30,8 +34,54 @@ export const tubeTint = varyingProperty('vec3', 'tubeTint');
 // (three's TSL types reject the mixes of int and float the shader needs: it is checked when it compiles)
 const {
   Fn, abs, attribute, cos, cross, dot, float, int, ivec2, max, mix, modelViewMatrix, normalLocal, normalize, select, sin,
-  textureLoad, vec3, vec4,
+  textureLoad, textureStore, vec3, vec4,
 } = TSL as any;
+
+/** what a TubeMesh reads its nodes from: TubeNodes (written by the CPU) or GPUTubeNodes */
+export interface TubeNodeSource {
+  readonly texture: THREE.Texture;
+  /** where the tubes may be, and their largest radius: the levels of detail go by them */
+  readonly box: THREE.Box3;
+  radius: number;
+  dispose(): void;
+}
+
+/**
+ * Nodes the GPU writes itself, from a compute shader (`storeTubeNode`), in
+ * the layout of TubeNodes. The CPU never sees them: set `box` and `radius` to
+ * where the tubes may be and how thick they are at most, for the levels of
+ * detail.
+ */
+export class GPUTubeNodes implements TubeNodeSource {
+  readonly texture: THREE.StorageTexture;
+  readonly box = new THREE.Box3();
+  radius = 0;
+
+  constructor(nodes: number) {
+    const h = Math.max(1, Math.ceil((PER * nodes) / W));
+    this.texture = new THREE.StorageTexture(W, h);
+    this.texture.type = THREE.FloatType;
+    this.texture.magFilter = this.texture.minFilter = THREE.NearestFilter;
+  }
+
+  dispose(): void {
+    this.texture.dispose();
+  }
+}
+
+/**
+ * In a compute shader (TSL), writes node `i` of `nodes`: its position and
+ * the radius of the tube there (0 hides it), the normal of its frame (square
+ * to the cord, and carried along it so that the rings do not twist), and its
+ * glow (linear RGB, `tubeTint`).
+ */
+export function storeTubeNode(nodes: GPUTubeNodes, i: any, position: any, radius: any, normal: any, tint: any): void {
+  const at = (k: any) => ivec2(k.mod(W), k.div(W));
+  const k = int(i).mul(PER);
+  textureStore(nodes.texture, at(k), vec4(position, radius)).toWriteOnly();
+  textureStore(nodes.texture, at(k.add(1)), vec4(normal, 0)).toWriteOnly();
+  textureStore(nodes.texture, at(k.add(2)), vec4(tint, 0)).toWriteOnly();
+}
 
 const sphere = new THREE.Sphere();
 const eye = new THREE.Vector3();
@@ -59,7 +109,7 @@ export class TubeMesh extends THREE.Mesh {
   /** a shadow is being drawn: its renderObject calls onBeforeRender too, after onBeforeShadow */
   private shadowing = false;
 
-  constructor(segments: number, material: THREE.NodeMaterial, private nodes: TubeNodes, options: TubeOptions = {}) {
+  constructor(segments: number, material: THREE.NodeMaterial, private nodes: TubeNodeSource, options: TubeOptions = {}) {
     const o = resolve(options);
     const geo = new THREE.InstancedBufferGeometry();
     const { rings, lists } = stretch(o.radial, o.sub);

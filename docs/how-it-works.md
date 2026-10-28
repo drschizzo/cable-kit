@@ -95,3 +95,5 @@ A tube a few pixels wide needs no 16 sides. As its radius on screen shrinks, eve
 ### WebGL and WebGPU
 
 For `WebGLRenderer`, the shader is GLSL, inserted at the start of the material's vertex shader; the mesh hands swept copies of its material to the passes that draw with their own. For `WebGPURenderer`, the same computation is written in TSL and given to the material as its `positionNode`, which also sets the normal; shadows and post-processing draw the same material. `WebGPURenderer` runs it on WebGPU, or on WebGL 2 where there is none.
+
+On WebGPU, the node map may also be a storage texture that a compute shader writes (`GPUTubeNodes`, `storeTubeNode`), in the same layout: the nodes are then computed and drawn without ever crossing to the CPU, which only asks for the compute and the image each frame.

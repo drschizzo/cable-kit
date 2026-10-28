@@ -39,6 +39,33 @@ const tubes = new TubeMesh(segmentCount, material, nodes);
 
 The mesh sets the material's `positionNode`, which also sets the normal. Shadows and post-processing passes draw the same material, so nothing else needs it.
 
+### Nodes computed on the GPU
+
+With WebGPU, the nodes can be computed by a compute shader and never leave the GPU: write them into `GPUTubeNodes` with `storeTubeNode`, and give those to the mesh instead of `TubeNodes`.
+
+```ts
+import { Fn, instanceIndex } from 'three/tsl';
+import { GPUTubeNodes, TubeMesh, storeTubeNode } from '@drschizzo/three-cable-tubes/webgpu';
+
+const nodes = new GPUTubeNodes(count);
+nodes.box.set(min, max);       // where the tubes may be, for the levels of detail
+nodes.radius = 0.001;          // and how thick they are at most
+
+const update = Fn(() => {
+  const i = instanceIndex;
+  // position, radius, a normal square to the cord (carried along it), glow
+  storeTubeNode(nodes, i, positionOf(i), radiusOf(i), normalOf(i), glowOf(i));
+})().compute(count);
+
+const tubes = new TubeMesh(segments, material, nodes);
+renderer.setAnimationLoop(() => {
+  renderer.compute(update);
+  renderer.render(scene, camera);
+});
+```
+
+The CPU then does nothing per frame but ask for the compute and the image, however many nodes there are. Compute shaders need WebGPU: this does not run on the WebGL 2 fallback.
+
 ## The API
 
 - **`TubeNodes(count)`**: the nodes, as the GPU reads them. `write(x, start, n, radius)` sends n nodes from `start` (positions xyz interleaved), with one radius for all of them or one per node (`radius[i]`); a radius of 0 hides the tube. `hide(start, n)` hides it. `tint(i, color)` sets the glow at node i.
@@ -50,7 +77,7 @@ The mesh sets the material's `positionNode`, which also sets the normal. Shadows
 ## Limits
 
 - The WebGL version needs WebGL 2 (it fetches texels in the vertex shader from a float texture).
-- The WebGPU version has been checked in Chromium, on WebGPU and on its WebGL 2 fallback.
+- The WebGPU version has been checked in Chromium, on WebGPU and on its WebGL 2 fallback; nodes computed on the GPU need WebGPU itself.
 - Every tube of a mesh shares its material; colour, tag and glow vary per tube or per node.
 
 ## License

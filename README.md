@@ -5,7 +5,7 @@ Thousands of cables for the web, in two packages that work together or apart:
 | Package | What it does | Depends on |
 |---|---|---|
 | [`@drschizzo/avbd-cables`](packages/avbd-cables) | simulates cables: inextensible, bending, colliding with each other and with static shapes, with friction, falling asleep at rest; in a Web Worker if you like | nothing |
-| [`@drschizzo/three-cable-tubes`](packages/three-cable-tubes) | draws them: smooth tubes swept on the GPU from their nodes alone, one draw call for all of them, with levels of detail; for `WebGLRenderer` (GLSL) and `WebGPURenderer` (TSL) | three.js |
+| [`@drschizzo/three-cable-tubes`](packages/three-cable-tubes) | draws them: smooth tubes swept on the GPU from their nodes alone, one draw call for all of them, with levels of detail; for `WebGLRenderer` (GLSL) and `WebGPURenderer` (TSL), whose nodes may also come from a compute shader | three.js |
 
 The solver uses Augmented Vertex Block Descent (Giles, Diaz and Yuksel, SIGGRAPH 2025). Both packages were written for [Brassage](https://github.com/drschizzo/cablemanagement), a cable management game in which a room of network racks holds thousands of patch cords ([play it](https://drschizzo.github.io/cablemanagement/)).
 
@@ -21,7 +21,7 @@ Then open http://localhost:5173:
 - **grab**: ropes you take and drag with the mouse, held back by a rod and the floor;
 - **falling**: hundreds of ropes falling in a heap, the physics in a Web Worker;
 - **tubes only**: thousands of tubes animated by hand, no physics;
-- **webgpu**: the tubes on `WebGPURenderer`, and its WebGL 2 fallback.
+- **webgpu**: a fibre optic lamp: 16 000 strands whose nodes a compute shader moves every frame, never leaving the GPU, with pulses of light made by a TSL material and a bloom (needs WebGPU).
 
 ## In a few lines
 
