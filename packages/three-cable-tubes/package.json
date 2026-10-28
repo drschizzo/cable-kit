@@ -1,0 +1,50 @@
+{
+  "name": "@drschizzo/three-cable-tubes",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "author": "drschizzo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drschizzo/cable-kit.git",
+    "directory": "packages/three-cable-tubes"
+  },
+  "homepage": "https://github.com/drschizzo/cable-kit",
+  "bugs": "https://github.com/drschizzo/cable-kit/issues",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "description": "Thousands of smooth tubes for three.js, swept on the GPU from their nodes alone: WebGLRenderer (GLSL) and WebGPURenderer (TSL).",
+  "keywords": [
+    "three",
+    "threejs",
+    "tube",
+    "cable",
+    "rope",
+    "instancing",
+    "webgpu",
+    "tsl"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "source": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./webgpu": {
+      "types": "./dist/webgpu.d.ts",
+      "source": "./src/webgpu.ts",
+      "default": "./dist/webgpu.js"
+    }
+  },
+  "peerDependencies": {
+    "three": ">=0.183.0"
+  }
+}
