@@ -127,7 +127,9 @@ export function stretch(radial: number, sub: number): { rings: THREE.BufferAttri
     for (let k = 0; k < SUB; k += step) {
       for (let r = 0; r < RADIAL; r += step) {
         const a = k * RADIAL + r, b = k * RADIAL + ((r + step) % RADIAL), next = step * RADIAL;
-        out.push(a, a + next, b, b, a + next, b + next);
+        // counter-clockwise seen from outside: round the ring is round the
+        // tangent (up = tangent × side), so the next ring comes after the next vertex
+        out.push(a, b, a + next, b, b + next, a + next);
       }
     }
     return new THREE.BufferAttribute(new Uint16Array(out), 1);

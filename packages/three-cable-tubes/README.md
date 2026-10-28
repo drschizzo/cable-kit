@@ -95,6 +95,7 @@ The CPU then does nothing per frame but ask for the compute and the image, howev
 - The WebGL version needs WebGL 2 (it fetches texels in the vertex shader from a float texture).
 - The WebGPU version has been checked in Chromium, on WebGPU and on its WebGL 2 fallback; nodes computed on the GPU need WebGPU itself.
 - Every tube of a mesh shares its material; colour, tag and glow vary per tube or per node.
+- A material draws the tubes of one mesh at a time. Given one that another mesh draws, a mesh draws a copy of it (its `material`; in GLSL, the copy keeps your `onBeforeCompile`), which does not follow later changes to the original. A disposed mesh leaves its material free: a mesh built again to replace another one draws the same material.
 
 ## License
 
