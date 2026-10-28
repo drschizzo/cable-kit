@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { TubeMesh, TubeNodes, TubeSync, swept } from '@drschizzo/three-cable-tubes';
 import * as GPU from '@drschizzo/three-cable-tubes/webgpu';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
+import { float, vec3 } from 'three/tsl';
 
 // The tubes without a GPU: what they send it (the node map) and the shader they make.
 
@@ -108,5 +109,21 @@ describe('tubes', () => {
     const h = (big.texture.image as { height: number }).height;
     expect(h).toBeLessThanOrEqual(8192);
     expect(big.width * h).toBeGreaterThanOrEqual(3 * 5_000_000);
+  });
+
+  it('sweepStrands makes a compute shader per node, and one for the glow only when there is a tint', () => {
+    const nodes = new GPU.GPUTubeNodes(10 * 8);
+    const base = { count: 10, nodes: 8, segment: 0.02, root: () => vec3(0, 0, 0), direction: () => vec3(0, 1, 0), radius: () => float(0.001) };
+    const plain = GPU.sweepStrands(nodes, base);
+    expect(plain.update.count).toBe(80);
+    expect(plain.glow).toBeNull();
+    const lit = GPU.sweepStrands(nodes, { ...base, tint: () => vec3(1, 0, 0) });
+    expect(lit.glow!.count).toBe(80);
+    // laid strand by strand, each on its own segments
+    const mesh = new GPU.TubeMesh(10 * 7, new MeshStandardNodeMaterial(), nodes);
+    GPU.layStrands(mesh, base, () => new THREE.Color(1, 1, 1), (s) => s);
+    const seg = mesh.geometry.getAttribute('tubeSeg'), arc = mesh.geometry.getAttribute('tubeArc');
+    expect([seg.getX(7 * 3), seg.getY(7 * 3), seg.getZ(7 * 3), arc.getZ(7 * 3)]).toEqual([24, 24, 31, 3]);
+    mesh.dispose();
   });
 });

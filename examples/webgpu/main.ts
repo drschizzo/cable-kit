@@ -1,7 +1,7 @@
 // A fibre optic lamp, on WebGPU: 50 000 strands that rise from the lamp, bend
 // under their weight and sway. Their nodes are computed every frame by a
-// compute shader and written straight into the tubes' node map
-// (`GPUTubeNodes`, `storeTubeNode`): they never leave the GPU, and the CPU
+// compute shader (`sweepStrands`) and written straight into the tubes' node
+// map (`GPUTubeNodes`): they never leave the GPU, and the CPU
 // does nothing per frame but ask for the compute and the image. Pulses of
 // light run up the strands: the material makes them in TSL, from `tubeCoord`
 // (where a fragment is along its strand, and the strand's tag: its phase) and
@@ -9,17 +9,17 @@
 // A bloom pass, in TSL too, lets them shine.
 
 import * as THREE from 'three/webgpu';
-import { Fn, Loop, cos, exp, float, fract, hash, instanceIndex, mix, pass, sin, smoothstep, time, uint, vec3 } from 'three/tsl';
+import { cos, exp, float, fract, hash, mix, pass, sin, smoothstep, time, vec3 } from 'three/tsl';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { GPUTubeNodes, TubeMesh, storeTubeNode, storeTubeNodeTint, tubeCoord, tubeTint } from '@drschizzo/three-cable-tubes/webgpu';
+import { GPUTubeNodes, TubeMesh, layStrands, sweepStrands, tubeCoord, tubeTint } from '@drschizzo/three-cable-tubes/webgpu';
 
 // ?strands=, ?nodes= (per strand), ?radial= (vertices round a ring), ?lod= (radius on screen, px, under which a fibre keeps a sixteenth of its vertices), ?bloom=0
 const query = new URLSearchParams(location.search);
 const STRANDS = Number(query.get('strands')) || 50000, NODES = Number(query.get('nodes')) || 24, LENGTH = 0.55, SEG = LENGTH / (NODES - 1), RADIUS = 0.0006, BASE = 0.3;
 
-const renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const renderer = new THREE.WebGPURenderer({ antialias: query.get('aa') !== '0', trackTimestamp: true });
+renderer.setPixelRatio(Number(query.get('pr')) || Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
@@ -30,9 +30,9 @@ if (!(renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBack
   throw new Error('no WebGPU');
 }
 
-// --- the strands, computed on the GPU: one invocation per node, so that
-// neighbouring invocations write neighbouring texels; each finds where it is
-// by walking up its strand from the lamp
+// --- the strands, computed on the GPU by sweepStrands: given where each
+// strand starts and which way it goes along its length, it lays the nodes,
+// carries the frame of the tube up the strand and writes them, every frame
 const nodes = new GPUTubeNodes(STRANDS * NODES);
 nodes.box.set(new THREE.Vector3(-0.8, -0.1, -0.8), new THREE.Vector3(0.8, 1, 0.8));
 nodes.radius = RADIUS;
@@ -47,43 +47,33 @@ function strand(s: any) {
   };
 }
 
-/** heading round the lamp and slope of a strand at u (0 at the lamp, 1 at the tip): waves run up it, growing towards the tip */
-function bearing(st: ReturnType<typeof strand>, u: any): { az: any; angle: any } {
-  const az = st.heading.add(sin(time.mul(st.speed).sub(u.mul(5)).add(st.phase)).mul(u).mul(0.3));
-  const angle = st.rise.sub(st.bend.mul(u).mul(u).mul(LENGTH)).add(sin(time.mul(st.speed.mul(0.8)).sub(u.mul(4)).add(st.phase.mul(1.7))).mul(u).mul(0.18));
-  return { az, angle };
-}
-
-const strands = Fn(() => {
-  const s = instanceIndex.div(NODES), i = instanceIndex.mod(NODES);
-  const st = strand(s);
-  const p = vec3(0, BASE, 0).toVar();
-  Loop({ start: uint(0), end: i, type: 'uint', condition: '<' }, ({ i: k }: { i: any }) => {
-    const { az, angle } = bearing(st, float(k).div(NODES - 1));
-    p.addAssign(vec3(cos(az).mul(cos(angle)), sin(angle), sin(az).mul(cos(angle))).mul(SEG));
-  });
-  const u = float(i).div(NODES - 1);
-  const { az } = bearing(st, u);
-  // square to the strand there, which lies in the plane of its heading and up
-  const side = vec3(sin(az).negate(), 0, cos(az));
-  storeTubeNode(nodes, instanceIndex, p, float(RADIUS).mul(u.mul(-0.4).add(1)), side);
-})().compute(STRANDS * NODES);
-
-// the glow does not change: written once. Dim along the strand, bright at its tip, as fibre optics are
-const glows = Fn(() => {
-  const s = instanceIndex.div(NODES), u = float(instanceIndex.mod(NODES)).div(NODES - 1);
-  storeTubeNodeTint(nodes, instanceIndex, strand(s).colour.mul(smoothstep(0.9, 1, u).mul(1.2).add(0.006)));
-})().compute(STRANDS * NODES);
-renderer.compute(glows);
+const fibres = {
+  count: STRANDS, nodes: NODES, segment: SEG,
+  root: () => vec3(0, BASE, 0),
+  // round the lamp and up, bending under its weight; waves run up it, growing towards the tip
+  direction: (s: any, u: any): any => {
+    const st = strand(s);
+    const az: any = st.heading.add(sin(time.mul(st.speed).sub(u.mul(5)).add(st.phase)).mul(u).mul(0.3));
+    const angle: any = st.rise.sub(st.bend.mul(u).mul(u).mul(LENGTH)).add(sin(time.mul(st.speed.mul(0.8)).sub(u.mul(4)).add(st.phase.mul(1.7))).mul(u).mul(0.18));
+    return vec3(cos(az).mul(cos(angle)), sin(angle), sin(az).mul(cos(angle)));
+  },
+  radius: (_s: any, u: any) => float(RADIUS).mul(u.mul(-0.4).add(1)),
+  // dim along the strand, bright at its tip, as fibre optics are
+  tint: (s: any, u: any) => strand(s).colour.mul(smoothstep(0.9, 1, u).mul(1.2).add(0.006)),
+};
+const { update: strands, glow } = sweepStrands(nodes, fibres);
+renderer.compute(glow!);
 
 // --- the tubes: a dark fibre, its own glow, and pulses of light running up it
-const material = new THREE.MeshStandardNodeMaterial({ color: '#3a3f48', roughness: 0.5 });
+const material = query.has('basic') ? new THREE.MeshBasicNodeMaterial({ color: '#3a3f48' }) : new THREE.MeshStandardNodeMaterial({ color: '#3a3f48', roughness: 0.5 });
 const along = tubeCoord.x.div(LENGTH);
 const pulse = exp(along.sub(fract(time.mul(0.12).add(tubeCoord.w))).mul(10).pow(2).negate());
-material.emissiveNode = tubeTint.add(tubeTint.mul(pulse).mul(12));
+const light = tubeTint.add(tubeTint.mul(pulse).mul(12));
+if (material instanceof THREE.MeshStandardNodeMaterial) material.emissiveNode = light;
+else material.colorNode = light.add(vec3(0.03));
 const tubes = new TubeMesh(STRANDS * (NODES - 1), material, nodes, { radial: Number(query.get('radial')) || 8, sub: 4, lodQuarter: Number(query.get('lod')) || 1.5, lodHalf: 4 * (Number(query.get('lod')) || 1.5) });
 const dark = new THREE.Color(0, 0, 0);
-for (let s = 0; s < STRANDS; s++) tubes.lay(s * (NODES - 1), s * NODES, NODES, dark, 0, SEG, Math.random());
+layStrands(tubes, fibres, () => dark, () => Math.random());
 
 // --- the room: the lamp's base, a floor, little light
 const scene = new THREE.Scene();

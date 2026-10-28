@@ -33,8 +33,8 @@ export const tubeTint = varyingProperty('vec3', 'tubeTint');
 
 // (three's TSL types reject the mixes of int and float the shader needs: it is checked when it compiles)
 const {
-  Fn, abs, attribute, cos, cross, dot, float, int, ivec2, max, mix, modelViewMatrix, normalLocal, normalize, select, sin,
-  textureLoad, textureStore, vec3, vec4,
+  Fn, Loop, abs, attribute, cos, cross, dot, float, instanceIndex, int, ivec2, max, mix, modelViewMatrix, normalLocal, normalize,
+  select, sin, textureLoad, textureStore, uint, vec3, vec4,
 } = TSL as any;
 
 /** what a TubeMesh reads its nodes from: TubeNodes (written by the CPU) or GPUTubeNodes */
@@ -97,6 +97,65 @@ export function storeTubeNode(nodes: GPUTubeNodes, i: any, position: any, radius
 /** In a compute shader (TSL), writes the glow of node `i` of `nodes` (linear RGB, `tubeTint`). */
 export function storeTubeNodeTint(nodes: GPUTubeNodes, i: any, tint: any): void {
   textureStore(nodes.texture, texel(int(i).mul(PER).add(2), nodes.width), vec4(tint, 0)).toWriteOnly();
+}
+
+/**
+ * Strands for `sweepStrands`: `count` of them, of `nodes` nodes `segment`
+ * metres apart. The functions are TSL, of the strand's index `s` (uint) and
+ * of where along it `u` is (0 at its root, 1 at its tip).
+ */
+export interface Strands {
+  count: number;
+  nodes: number;
+  segment: number;
+  /** where strand s starts */
+  root(s: any): any;
+  /** which way strand s goes at u (a unit vector): it is laid along it, `segment` by `segment` */
+  direction(s: any, u: any): any;
+  /** its radius at u (m) */
+  radius(s: any, u: any): any;
+  /** its glow at u (linear RGB), written once (`glow`), not every frame */
+  tint?(s: any, u: any): any;
+}
+
+/**
+ * Compute shaders that write strands into `nodes` (strand s from node
+ * s × strands.nodes): `update`, to run every frame (or whenever they move),
+ * and `glow`, to run once when there is a tint. One invocation per node, so
+ * that neighbouring invocations write neighbouring texels; each walks up its
+ * strand from the root to find where it is, and carries the frame of the
+ * tube along it (square to the strand, without twisting) on the way.
+ */
+export function sweepStrands(nodes: GPUTubeNodes, strands: Strands): { update: THREE.ComputeNode; glow: THREE.ComputeNode | null } {
+  const N = strands.nodes, total = strands.count * N;
+  const update = Fn(() => {
+    const s = instanceIndex.div(N), i = instanceIndex.mod(N);
+    const p = strands.root(s).toVar();
+    const t0 = strands.direction(s, float(0));
+    // a first normal square to the strand at its root, then carried up it
+    const n = normalize(cross(t0, select(abs(t0.y).lessThan(0.9), vec3(0, 1, 0), vec3(1, 0, 0)))).toVar();
+    Loop({ start: uint(0), end: i, type: 'uint', condition: '<' }, ({ i: k }: { i: any }) => {
+      const t = strands.direction(s, float(k).div(N - 1));
+      p.addAssign(t.mul(strands.segment));
+      const next = strands.direction(s, float(k.add(1)).div(N - 1));
+      n.assign(normalize(n.sub(next.mul(dot(n, next)))));
+    });
+    storeTubeNode(nodes, instanceIndex, p, strands.radius(s, float(i).div(N - 1)), n);
+  })().compute(total);
+  const tint = strands.tint;
+  const glow = tint
+    ? Fn(() => {
+      const s = instanceIndex.div(N), u = float(instanceIndex.mod(N)).div(N - 1);
+      storeTubeNodeTint(nodes, instanceIndex, tint(s, u));
+    })().compute(total)
+    : null;
+  return { update, glow };
+}
+
+/** lays every strand of `strands` on `mesh` (see TubeMesh.lay): its colour and tag, by strand */
+export function layStrands(mesh: TubeMesh, strands: Pick<Strands, 'count' | 'nodes' | 'segment'>, color: (s: number) => THREE.Color, tag: (s: number) => number = () => 0): void {
+  const N = strands.nodes;
+  for (let s = 0; s < strands.count; s++) mesh.lay(s * (N - 1), s * N, N, color(s), 0, strands.segment, tag(s));
 }
 
 const sphere = new THREE.Sphere();
