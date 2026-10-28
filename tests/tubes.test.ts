@@ -101,4 +101,12 @@ describe('tubes', () => {
     expect(material.positionNode).not.toBeNull();
     mesh.dispose();
   });
+
+  it('GPU nodes widen their texture past 8192 rows', () => {
+    const small = new GPU.GPUTubeNodes(1000), big = new GPU.GPUTubeNodes(5_000_000);
+    expect(small.width).toBe(1024);
+    const h = (big.texture.image as { height: number }).height;
+    expect(h).toBeLessThanOrEqual(8192);
+    expect(big.width * h).toBeGreaterThanOrEqual(3 * 5_000_000);
+  });
 });

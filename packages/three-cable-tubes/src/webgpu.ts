@@ -40,6 +40,8 @@ const {
 /** what a TubeMesh reads its nodes from: TubeNodes (written by the CPU) or GPUTubeNodes */
 export interface TubeNodeSource {
   readonly texture: THREE.Texture;
+  /** texels per row of the texture (TubeNodes: 1024) */
+  readonly width?: number;
   /** where the tubes may be, and their largest radius: the levels of detail go by them */
   readonly box: THREE.Box3;
   radius: number;
@@ -54,12 +56,17 @@ export interface TubeNodeSource {
  */
 export class GPUTubeNodes implements TubeNodeSource {
   readonly texture: THREE.StorageTexture;
+  /** texels per row: wider when there are many nodes, so that the texture stays within 8192 rows (WebGPU's default limit) */
+  readonly width: number;
   readonly box = new THREE.Box3();
   radius = 0;
 
   constructor(nodes: number) {
-    const h = Math.max(1, Math.ceil((PER * nodes) / W));
-    this.texture = new THREE.StorageTexture(W, h);
+    let w = W;
+    while (Math.ceil((PER * nodes) / w) > 8192 && w < 8192) w *= 2;
+    this.width = w;
+    const h = Math.max(1, Math.ceil((PER * nodes) / w));
+    this.texture = new THREE.StorageTexture(w, h);
     this.texture.type = THREE.FloatType;
     this.texture.magFilter = this.texture.minFilter = THREE.NearestFilter;
   }
@@ -69,18 +76,27 @@ export class GPUTubeNodes implements TubeNodeSource {
   }
 }
 
+/** where texel `t` of a node map `w` texels wide is */
+const texel = (t: any, w: number) => ivec2(t.mod(w), t.div(w));
+
 /**
  * In a compute shader (TSL), writes node `i` of `nodes`: its position and
  * the radius of the tube there (0 hides it), the normal of its frame (square
- * to the cord, and carried along it so that the rings do not twist), and its
- * glow (linear RGB, `tubeTint`).
+ * to the cord, and carried along it so that the rings do not twist), and,
+ * if given, its glow (linear RGB, `tubeTint`). A glow that does not change
+ * is better written once, with `storeTubeNodeTint`: the writes are most of
+ * what such a compute shader costs.
  */
-export function storeTubeNode(nodes: GPUTubeNodes, i: any, position: any, radius: any, normal: any, tint: any): void {
-  const at = (k: any) => ivec2(k.mod(W), k.div(W));
+export function storeTubeNode(nodes: GPUTubeNodes, i: any, position: any, radius: any, normal: any, tint?: any): void {
   const k = int(i).mul(PER);
-  textureStore(nodes.texture, at(k), vec4(position, radius)).toWriteOnly();
-  textureStore(nodes.texture, at(k.add(1)), vec4(normal, 0)).toWriteOnly();
-  textureStore(nodes.texture, at(k.add(2)), vec4(tint, 0)).toWriteOnly();
+  textureStore(nodes.texture, texel(k, nodes.width), vec4(position, radius)).toWriteOnly();
+  textureStore(nodes.texture, texel(k.add(1), nodes.width), vec4(normal, 0)).toWriteOnly();
+  if (tint !== undefined) storeTubeNodeTint(nodes, i, tint);
+}
+
+/** In a compute shader (TSL), writes the glow of node `i` of `nodes` (linear RGB, `tubeTint`). */
+export function storeTubeNodeTint(nodes: GPUTubeNodes, i: any, tint: any): void {
+  textureStore(nodes.texture, texel(int(i).mul(PER).add(2), nodes.width), vec4(tint, 0)).toWriteOnly();
 }
 
 const sphere = new THREE.Sphere();
@@ -150,7 +166,8 @@ export class TubeMesh extends THREE.Mesh {
   private sweep() {
     const { sub: SUB, radial: RADIAL, lodHalf, lodQuarter } = this.options;
     const tex = this.nodes.texture, px = this.pxPerMetre;
-    const at = (k: any): any => textureLoad(tex, ivec2(k.mod(W), k.div(W)));
+    const w = this.nodes.width ?? W;
+    const at = (k: any): any => textureLoad(tex, ivec2(k.mod(w), k.div(w)));
     return Fn(() => {
       const s = attribute('tubeSeg', 'vec3'), ring = attribute('normal', 'vec3'), a = attribute('tubeArc', 'vec3');
       const i1 = int(s.x.add(0.5)).toVar(), iA = int(s.y.add(0.5)), iB = int(s.z.add(0.5));
