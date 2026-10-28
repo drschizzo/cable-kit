@@ -20,6 +20,7 @@ Then open http://localhost:5173:
 
 - **grab**: ropes you take and drag with the mouse, held back by a rod and the floor;
 - **falling**: hundreds of ropes falling in a heap, the physics in a Web Worker;
+- **knots**: ropes pressing hard on one another and on bars: knots pulled tight that hold once let go, a capstan that holds with one and a half turns and slides with half of one, three strands braided, and a playground of pegs and a ring; the ropes have strands of their own, drawn in the fragment shader;
 - **tubes only**: thousands of tubes animated by hand, no physics;
 - **webgpu**: a fibre optic lamp: 50 000 strands (`?strands=` for more) whose nodes a compute shader moves every frame, never leaving the GPU, with pulses of light made by a TSL material and a bloom (needs WebGPU).
 
