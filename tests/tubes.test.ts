@@ -56,6 +56,8 @@ describe('tubes', () => {
     expect(def).toContain('vec4 tubeCoord');
     expect(def).toContain('vec3 tubeTint');
     expect(def).toContain('float(tK) / 8.0');
+    // the coarsest rings face the camera
+    expect(def).toMatch(/if \(tStep == 4\) \{[^}]*cameraPosition/);
     const own = vertexOf(swept(new THREE.MeshBasicMaterial(), nodes, { radial: 8, sub: 4, aliases: { glow: 'tubeTint' } }));
     expect(own).toContain('float(tK) / 4.0');
     expect(own).toContain(`float(tR) * ${(Math.PI / 4).toFixed(8)}`);

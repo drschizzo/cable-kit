@@ -90,7 +90,7 @@ The geometry holds no vertex per point of any tube. Every segment of every cable
 
 ### Levels of detail
 
-A tube a few pixels wide needs no 16 sides. As its radius on screen shrinks, every other vertex (then three in four) folds onto its neighbour, along the cable and round it, and their triangles, flat, are dropped before they cost a pixel. Folded vertices still run the shader, though: when even the nearest node is that far, the mesh draws coarser lists of triangles instead, a quarter or a sixteenth of the vertices. Passes that do not show the outline (a shadow, the normals of a post-processing pass) draw a coarser list than the image.
+A tube a few pixels wide needs no 16 sides. As its radius on screen shrinks, every other vertex (then three in four) folds onto its neighbour, along the cable and round it, and their triangles, flat, are dropped before they cost a pixel. Folded vertices still run the shader, though: when even the nearest node is that far, the mesh draws coarser lists of triangles instead, a quarter or a sixteenth of the vertices. Passes that do not show the outline (a shadow, the normals of a post-processing pass) draw a coarser list than the image. At the coarsest, the few vertices left of a ring turn to face the camera: with two of them, a ring that kept the frame of the cable was a flat ribbon, which vanished when seen edge-on. Their normals lean towards the camera, so that the ribbon shades as the round tube it stands for.
 
 ### WebGL and WebGPU
 
