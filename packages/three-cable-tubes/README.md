@@ -64,6 +64,22 @@ renderer.setAnimationLoop(() => {
 });
 ```
 
+For strands (grass, hair, fibres, decorative cables), `sweepStrands` writes that compute shader for you: give it where each strand starts and which way it goes along its length, and it lays the nodes, carries the frame of the tube up each strand without twisting, and writes them with one invocation per node. `layStrands` lays them on the mesh.
+
+```ts
+const strands = {
+  count: 50_000, nodes: 24, segment: 0.02,
+  root: (s) => rootOf(s),                  // TSL, of the strand's index
+  direction: (s, u) => directionOf(s, u),  // a unit vector, u from 0 (root) to 1 (tip)
+  radius: (s, u) => float(0.0006),
+  tint: (s, u) => glowOf(s, u),            // optional: written once
+};
+const { update, glow } = sweepStrands(nodes, strands);
+renderer.compute(glow);                    // once
+layStrands(tubes, strands, (s) => colourOf(s));
+// every frame: renderer.compute(update)
+```
+
 The CPU then does nothing per frame but ask for the compute and the image, however many nodes there are. Write what does not change (often the glow) once, with `storeTubeNodeTint`, rather than every frame, and let neighbouring invocations write neighbouring nodes (one invocation per node rather than per cord): the writes are most of what such a compute shader costs. A `GPUTubeNodes` of millions of nodes widens its texture to stay within WebGPU's default limit of 8192 rows. Compute shaders need WebGPU: this does not run on the WebGL 2 fallback.
 
 ## The API
