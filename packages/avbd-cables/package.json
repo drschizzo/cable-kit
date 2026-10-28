@@ -1,0 +1,41 @@
+{
+  "name": "@drschizzo/avbd-cables",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "author": "drschizzo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drschizzo/cable-kit.git",
+    "directory": "packages/avbd-cables"
+  },
+  "homepage": "https://github.com/drschizzo/cable-kit",
+  "bugs": "https://github.com/drschizzo/cable-kit/issues",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "description": "A cable solver for the web: Augmented Vertex Block Descent for thousands of inextensible cables, with contacts, friction, sleeping, targets and a Web Worker. No dependency.",
+  "keywords": [
+    "cable",
+    "rope",
+    "physics",
+    "avbd",
+    "vertex block descent",
+    "simulation",
+    "web worker"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "source": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  }
+}
