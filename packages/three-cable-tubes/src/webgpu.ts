@@ -199,6 +199,8 @@ export class TubeMesh extends THREE.Mesh {
     const geo = new THREE.InstancedBufferGeometry();
     const { rings, lists } = stretch(o.radial, o.sub);
     geo.setAttribute('normal', rings);
+    // (three reads a position even when positionNode replaces it: the same buffer, so that it finds one)
+    geo.setAttribute('position', rings);
     const seg = new THREE.InstancedBufferAttribute(new Float32Array(3 * segments), 3);
     const color = new THREE.InstancedBufferAttribute(new Float32Array(3 * segments), 3);
     const arc = new THREE.InstancedBufferAttribute(new Float32Array(3 * segments), 3);
@@ -237,6 +239,9 @@ export class TubeMesh extends THREE.Mesh {
     // (the shadow is drawn in the middle of drawing the image: give it back its list)
     this.onAfterShadow = () => this.lod(this.level);
   }
+
+  /** the tubes are drawn where their nodes are, not where the geometry says: a ray never meets them */
+  override raycast(): void {}
 
   /** the point of the vertex on its tube, setting its normal, `tubeCoord` and `tubeTint` on the way (see tube.ts) */
   private sweep() {
