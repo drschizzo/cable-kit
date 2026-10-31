@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GPU solver check</title>
+    <style>
+      body { margin: 0; padding: 24px 16px; background: #101214; color: #d8dde3; font: 14px/1.5 system-ui, sans-serif; }
+      a { color: #8fc1ff; }
+      table { border-collapse: collapse; margin-top: 12px; }
+      td, th { padding: 4px 10px; border-bottom: 1px solid #2a2f35; text-align: right; font-variant-numeric: tabular-nums; }
+      td:first-child, th:first-child { text-align: left; }
+      .bad { color: #ff8a80; } .ok { color: #9be39b; }
+    </style>
+  </head>
+  <body>
+    <div><a href="../index.html">cable-kit</a> · the GPU solver against the CPU one, on the scenes of the tests · <span id="status">…</span></div>
+    <table id="out"><tr><th>scene</th><th>measure</th><th>CPU</th><th>GPU</th><th>expected</th></tr></table>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

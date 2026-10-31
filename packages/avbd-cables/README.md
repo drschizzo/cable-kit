@@ -81,6 +81,32 @@ The page keeps a full copy of the simulation and reads `x` as if it ran there. E
 
 The worker starts from `snapshot()`: positions, velocities, pins, targets, pinches, straps. Not the multipliers of the constraints and contacts, nor which cables sleep: the worker rebuilds them, so a simulation moved to a worker while things move goes on a little differently than it would have in place. Start the worker before things move to keep it exact.
 
+## On the GPU
+
+`GPUCableSim` (`@drschizzo/avbd-cables/gpu`) runs the same solver in WebGPU compute shaders, for scenes the CPU cannot keep up with: thousands of cables, hundreds of thousands of contacts. It takes the same settings and the main calls of `CableSim`; the nodes stay on the GPU.
+
+```ts
+import { GPUCableSim } from '@drschizzo/avbd-cables/gpu';
+
+const sim = new GPUCableSim(device, kind.params);   // three.js: renderer.backend.device
+sim.build(defs);
+sim.setStatics(shapes);
+sim.pin(0, 0, 1, 0);
+renderer.setAnimationLoop(() => {
+  sim.step();                                       // encodes and submits a frame, never waits
+  feed.update();                                    // the tubes read sim.positions on the GPU (three-cable-tubes: GPUTubeFeed)
+  renderer.render(scene, camera);
+});
+```
+
+- `positions`: a `GPUBuffer`, a `vec4` per node (x, y, z, radius); `cableBuffer`, a `vec4<u32>` per cable (first node, count).
+- `x`, `targetPull(i)`: read back a frame or two late, for the nodes with a target (and `watch`), or all of them with `readAll`; `readPositions()` returns a promise of all of them now.
+- `stats`: contacts, colours, contacts dropped for want of slots, the GPU's time for a step; `profile()` times a step kernel by kernel.
+- Options: `stretch` (nodes per stretch of cord solved in order, 5), `deterministic` (the same result on every run, a little slower on small scenes).
+- Not there yet: sleep (every cable stays awake), straps, pinches, ghosts, holders, `moveNodes`, `teleport`. It pays from a few thousand nodes: at about a thousand, it is no faster than the CPU.
+
+[docs/gpu.md](../../docs/gpu.md) explains how it maps onto the GPU, what it costs and where it differs from `CableSim`.
+
 ## Your own simulation
 
 Subclass `CableSim` for what drives your cables (a hand, sockets, channels that keep cables in them):
@@ -95,7 +121,7 @@ Subclass `CableSim` for what drives your cables (a hand, sockets, channels that 
 
 - The settings are checked for the three kinds above; other sizes need their own (more substeps and wider margins for thicker cables with longer segments). `npm run presets` in the repository shows how a kind behaves.
 - Static shapes are capsules and axis-aligned boxes.
-- The solver is single-threaded: a worker keeps it off the page's thread, it does not split it.
+- `CableSim` is single-threaded: a worker keeps it off the page's thread, it does not split it. `GPUCableSim` runs on the GPU (above).
 
 ## License
 

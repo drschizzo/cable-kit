@@ -36,6 +36,11 @@
       "types": "./dist/index.d.ts",
       "source": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./gpu": {
+      "types": "./dist/gpu.d.ts",
+      "source": "./src/gpu.ts",
+      "default": "./dist/gpu.js"
     }
   }
 }

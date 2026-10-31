@@ -4,7 +4,7 @@ Thousands of cables for the web, in two packages that work together or apart:
 
 | Package | What it does | Depends on |
 |---|---|---|
-| [`@drschizzo/avbd-cables`](packages/avbd-cables) | simulates cables: inextensible, bending, colliding with each other and with static shapes, with friction, falling asleep at rest; in a Web Worker if you like | nothing |
+| [`@drschizzo/avbd-cables`](packages/avbd-cables) | simulates cables: inextensible, bending, colliding with each other and with static shapes, with friction, falling asleep at rest; in a Web Worker if you like, or on the GPU (WebGPU) for thousands of them | nothing |
 | [`@drschizzo/three-cable-tubes`](packages/three-cable-tubes) | draws them: smooth tubes swept on the GPU from their nodes alone, one draw call for all of them, with levels of detail; for `WebGLRenderer` (GLSL) and `WebGPURenderer` (TSL), whose nodes may also come from a compute shader (`sweepStrands` for strands) | three.js |
 
 The solver uses Augmented Vertex Block Descent (Giles, Diaz and Yuksel, SIGGRAPH 2025). Both packages were written for [Brassage](https://github.com/drschizzo/cablemanagement), a cable management game in which a room of network racks holds thousands of patch cords ([play it](https://drschizzo.github.io/cablemanagement/)).
@@ -24,6 +24,8 @@ Then open http://localhost:5173:
 - **falling**: hundreds of ropes falling in a heap, the physics in a Web Worker;
 - **knots**: ropes pressing hard on one another and on bars: knots pulled tight that hold once let go, a capstan that holds with one and a half turns and slides with half of one, three strands braided, and a playground of pegs and a ring; the ropes have strands of their own, drawn in the fragment shader;
 - **tubes only**: thousands of tubes animated by hand, no physics;
+- **gpu-heap**: thousands of ropes falling on bars, the solver on the GPU and the tubes reading its nodes there, with the CPU solver to compare (`?solver=cpu`) (needs WebGPU);
+- **gpu-check**: the GPU solver against the CPU one on the scenes of the tests (needs WebGPU);
 - **webgpu**: a fibre optic lamp: 50 000 strands (`?strands=` for more) whose nodes a compute shader moves every frame, never leaving the GPU, with pulses of light made by a TSL material and a bloom (needs WebGPU).
 
 ## In a few lines
@@ -51,7 +53,7 @@ renderer.setAnimationLoop(() => {
 });
 ```
 
-Each package's README explains how to use it; [docs/how-it-works.md](docs/how-it-works.md) explains how they work.
+Each package's README explains how to use it; [docs/how-it-works.md](docs/how-it-works.md) explains how they work, [docs/gpu.md](docs/gpu.md) how the solver runs on the GPU.
 
 ## Installing
 

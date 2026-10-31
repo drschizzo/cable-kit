@@ -76,6 +76,99 @@ export class GPUTubeNodes implements TubeNodeSource {
   }
 }
 
+/**
+ * Nodes computed on the GPU by something else than three.js (a solver in
+ * its own compute shaders, such as GPUCableSim of avbd-cables): a buffer of
+ * `vec4` per node (x, y, z and the radius there), and one of `vec4<u32>`
+ * per cable (its first node, how many).
+ */
+export interface GPUCableSource {
+  readonly positions: GPUBuffer;
+  readonly cableBuffer: GPUBuffer;
+  readonly cables: readonly unknown[];
+}
+
+const FEED = /* wgsl */ `
+@group(0) @binding(0) var<storage, read> pos: array<vec4f>;
+@group(0) @binding(1) var<storage, read> cables: array<vec4u>;
+@group(0) @binding(2) var nodes: texture_storage_2d<rgba32float, write>;
+struct Feed { width: u32, count: u32 }
+@group(0) @binding(3) var<uniform> feed: Feed;
+fn put(t: u32, v: vec4f) { textureStore(nodes, vec2u(t % feed.width, t / feed.width), v); }
+// one invocation per cable: it carries the frame along its nodes (as TubeNodes.write)
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= feed.count) { return; }
+  let cb = cables[id.x];
+  var n = vec3f(0.0);
+  for (var j = 0u; j < cb.y; j++) {
+    let i = cb.x + j;
+    let a = cb.x + max(j, 1u) - 1u;
+    let b = cb.x + min(j + 1u, cb.y - 1u);
+    var t = pos[b].xyz - pos[a].xyz;
+    let tl = length(t);
+    t = t / select(1.0, tl, tl > 0.0);
+    if (j == 0u) { n = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), abs(t.y) < 0.9); }
+    n -= dot(n, t) * t;
+    var nl = length(n);
+    if (nl < 1e-6) {
+      n = select(vec3f(0.0, t.z, -t.y), vec3f(-t.z, 0.0, t.x), abs(t.y) < 0.9);
+      nl = length(n);
+    }
+    n /= nl;
+    put(${PER}u * i, pos[i]);
+    put(${PER}u * i + 1u, vec4f(n, 0.0));
+  }
+}`;
+
+/**
+ * Copies nodes computed on the GPU outside three.js (`GPUCableSource`) into
+ * `GPUTubeNodes`, on the GPU: `update()` after each step of the source, before
+ * the image. The source must use the renderer's device (`renderer.backend.device`).
+ */
+export class GPUTubeFeed {
+  private device: GPUDevice;
+  private pipeline: GPUComputePipeline;
+  private group: GPUBindGroup;
+  private uniforms: GPUBuffer;
+  private count: number;
+
+  constructor(renderer: THREE.WebGPURenderer, nodes: GPUTubeNodes, source: GPUCableSource) {
+    const backend = renderer.backend as any;
+    if (!backend.isWebGPUBackend) throw new Error('GPUTubeFeed needs WebGPU');
+    this.device = backend.device;
+    renderer.initTexture(nodes.texture);
+    const texture: GPUTexture = backend.get(nodes.texture).texture;
+    this.pipeline = this.device.createComputePipeline({ layout: 'auto', compute: { module: this.device.createShaderModule({ code: FEED }), entryPoint: 'main' } });
+    this.count = source.cables.length;
+    this.uniforms = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(this.uniforms, 0, new Uint32Array([nodes.width, this.count, 0, 0]));
+    this.group = this.device.createBindGroup({
+      layout: this.pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: source.positions } },
+        { binding: 1, resource: { buffer: source.cableBuffer } },
+        { binding: 2, resource: texture.createView({ mipLevelCount: 1 }) },
+        { binding: 3, resource: { buffer: this.uniforms } },
+      ],
+    });
+  }
+
+  /** writes the nodes as they are now (on the GPU, in the order of the queue) */
+  update(): void {
+    const enc = this.device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.group);
+    pass.dispatchWorkgroups(Math.ceil(this.count / 64));
+    pass.end();
+    this.device.queue.submit([enc.finish()]);
+  }
+
+  dispose(): void {
+    this.uniforms.destroy();
+  }
+}
+
 /** where texel `t` of a node map `w` texels wide is */
 const texel = (t: any, w: number) => ivec2(t.mod(w), t.div(w));
 

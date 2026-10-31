@@ -76,7 +76,7 @@ The settings are given for a reference substep (`refSubsteps`). With more subste
 
 ### In a worker
 
-`threaded()` keeps the whole simulation in the page and moves its stepping to a worker. The methods that change it are listed by each class (`static mirrored`); a call is applied in the page, then repeated in the worker in the same order, and only the outermost call is sent (it makes the inner ones there too). Every frame, the page asks for a step (sending what changed without a call, such as where the pointer has taken a hand) and draws the last positions it got back: one request is in flight at a time, and if the worker falls behind, time is dropped rather than queued. A counter discards the answers computed before a teleport.
+`threaded()` keeps the whole simulation in the page and moves its stepping to a worker. (`GPUCableSim` runs it on the GPU instead: see [gpu.md](gpu.md).) The methods that change it are listed by each class (`static mirrored`); a call is applied in the page, then repeated in the worker in the same order, and only the outermost call is sent (it makes the inner ones there too). Every frame, the page asks for a step (sending what changed without a call, such as where the pointer has taken a hand) and draws the last positions it got back: one request is in flight at a time, and if the worker falls behind, time is dropped rather than queued. A counter discards the answers computed before a teleport.
 
 ## The tubes
 
