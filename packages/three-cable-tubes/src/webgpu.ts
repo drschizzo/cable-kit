@@ -185,6 +185,8 @@ export class TubeMesh extends THREE.Mesh {
   private arc: THREE.InstancedBufferAttribute;
   /** pixels on screen per metre at a depth of 1 m, for the camera being drawn from */
   private pxPerMetre = uniform(500);
+  /** the image's, while a shadow is drawn */
+  private imagePx = 500;
   /** the finest list the nearest node needs from where the camera stands (0, 1, 2), as of the last image */
   level = 0;
   private options: Required<TubeOptions>;
@@ -232,12 +234,17 @@ export class TubeMesh extends THREE.Mesh {
       this.lod(this.level);
     };
     this.onBeforeShadow = (r, _o, _c, shadowCamera) => {
+      this.imagePx = this.pxPerMetre.value;
       this.measure(r as unknown as THREE.Renderer, shadowCamera);
       this.lod(this.level + 1);
       this.shadowing = true;
     };
-    // (the shadow is drawn in the middle of drawing the image: give it back its list)
-    this.onAfterShadow = () => this.lod(this.level);
+    // (the shadow is drawn in the middle of drawing the image, after its onBeforeRender and
+    // before its uniforms are sent: give it back its list and its pixels per metre)
+    this.onAfterShadow = () => {
+      this.pxPerMetre.value = this.imagePx;
+      this.lod(this.level);
+    };
   }
 
   /** the tubes are drawn where their nodes are, not where the geometry says: a ray never meets them */
