@@ -269,4 +269,20 @@ describe('cable solver', () => {
     ends().forEach((e, k) => expect(Math.abs(e - before[k])).toBeLessThan(0.02));
     expect(sim.cables[0].asleep).toBe(true);
   });
+
+  it('a hand holding a hanging cord pulls with its weight, straight up', () => {
+    // (solved to convergence: at a patch cord's 3 substeps the hand overshoots)
+    const sim = new CableSim({ substeps: 12, sleepTime: 1e9 });
+    sim.build([{ points: cord([0, 2, 0], [0, 1, 0]), ...PATCH }]);
+    sim.setTarget(0, 0, 2, 0, 2, 1);
+    expect(sim.targetPull(1)).toBe(0);
+    run(sim, 5);
+    let weight = 0;
+    for (let i = 0; i < sim.n; i++) weight += sim.mass[i] * 9.81;
+    const f = { x: 0, y: 0, z: 0 };
+    let pull = 0;
+    for (let k = 0; k < 60; k++) { sim.step(); pull += sim.targetPull(0, f) / 60; }
+    expect(Math.abs(pull - weight) / weight).toBeLessThan(0.05);
+    expect(f.y).toBeGreaterThan(0.95 * Math.hypot(f.x, f.y, f.z));
+  });
 });

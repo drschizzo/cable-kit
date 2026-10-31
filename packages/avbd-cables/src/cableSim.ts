@@ -860,6 +860,27 @@ export class CableSim {
     for (const i of b.nodes) { this.bundleOf[i] = -1; this.wakeCable(this.cableOf[i]); }
   }
 
+  // ------------------------------------------------------------- reading
+
+  /**
+   * How hard the target of node i pulls on it now (N), 0 if it has none: its
+   * spring, stretched from where the node is to where the target pulls this
+   * step (within reach of the cord), no further than its leash. A target
+   * stiff enough that the node stays within its leash weighs what it holds:
+   * a hand feels the cord, a cord wound round a bar between them lightens it.
+   * `out`, if given, gets the force's direction and size (x, y, z).
+   */
+  targetPull(i: number, out?: { x: number; y: number; z: number }): number {
+    const k = this.targetK[i];
+    if (!(k > 0)) { if (out) { out.x = 0; out.y = 0; out.z = 0; } return 0; }
+    const x = this.x, j = 3 * i;
+    leash(x[j], x[j + 1], x[j + 2], this.targetAt, j, this.targetLead[i]);
+    const hr = this.P.dt / this.P.refSubsteps;
+    const f = (k * this.mass[i]) / (hr * hr);
+    if (out) { out.x = -f * pull.x; out.y = -f * pull.y; out.z = -f * pull.z; }
+    return f * Math.sqrt(pull.x * pull.x + pull.y * pull.y + pull.z * pull.z);
+  }
+
   /**
    * Start of a step: where each target pulls, within reach of the cord. A
    * node cannot go further from a pinned node of its cord than the length of
