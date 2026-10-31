@@ -29,7 +29,9 @@ export const ROUNDS = 16;
  */
 export const COL = { count: 0, start: COLORS, args: 2 * COLORS, fill: 5 * COLORS, node: 6 * COLORS };
 /** layout of `stats` (u32) */
-export const STAT = { overflowS: 0, overflowC: 1, overflowH: 2, uncoloured: 3, clamped: 4, contacts: 5, maxColor: 6, colors: 8, size: 8 + COLORS };
+export const STAT = { overflowS: 0, overflowC: 1, overflowH: 2, uncoloured: 3, clamped: 4, contacts: 5, maxColor: 6, awake: 7, colors: 8, size: 8 + COLORS };
+/** the colour of a sleeping stretch: in no colour, never solved */
+export const ASLEEP = 0xfffffffe;
 
 /** the uniforms of a step, in order (all 4 bytes) */
 export const PARAMS = [
@@ -38,7 +40,7 @@ export const PARAMS = [
   'gamma', 'alpha', 'alphaS', 'maxDepen', 'restDecel', 'maxMove', 'stretch', 'kMin',
   'beta', 'frictionK', 'contactDamping', 'restFriction', 'handWeight', 'kCap', 'kCapCable', 'kCapCableHeld',
   'kCapHeld', 'margin', 'marginLead', 'marginCap', 'marginStatic', 'frame', 'invCell', 'gammaRaw',
-  'muCable', 'muStatic', 'pad2', 'pad3',
+  'muCable', 'muStatic', 'sleepDist', 'sleepTime', 'wakeSpeed', 'wakeCreep', 'wakeSink', 'pad2',
 ].map((f) => { const [name, type] = f.split(':'); return { name, type: type ?? 'f32' }; });
 
 /** the buffers, as a kernel declares them */
@@ -50,6 +52,8 @@ export const RESOURCES: Record<string, { type: 'uniform' | 'storage' | 'read-onl
   segs: { type: 'storage', wgsl: 'var<storage, read_write> segs: array<vec4f>', buffer: 'segs' },
   tgt: { type: 'storage', wgsl: 'var<storage, read_write> tgt: array<vec4f>', buffer: 'tgt' },
   cables: { type: 'storage', wgsl: 'var<storage, read_write> cables: array<vec4u>', buffer: 'cables' },
+  cablesA: { type: 'storage', wgsl: 'var<storage, read_write> cablesA: array<atomic<u32>>', buffer: 'cables' },
+  sleepRef: { type: 'storage', wgsl: 'var<storage, read_write> sleepRef: array<vec4f>', buffer: 'sleepRef' },
   statics: { type: 'storage', wgsl: 'var<storage, read_write> statics: array<Static>', buffer: 'statics' },
   hash: { type: 'storage', wgsl: 'var<storage, read_write> hash: array<atomic<u32>>', buffer: 'hash' },
   contacts: { type: 'storage', wgsl: 'var<storage, read_write> contacts: array<Contact>', buffer: 'contacts' },
@@ -69,7 +73,7 @@ struct Params { ${PARAMS.map((p) => `${p.name}: ${p.type},`).join(' ')} }
 struct Pass { color: u32, forward: u32, a: u32, b: u32 }
 /** start of the substep, prediction, velocity (xyz) */
 struct State { x0: vec4f, xt: vec4f, v: vec4f }
-/** flags: 1 pinned, 2 segment to the next node, 4 heavy target, 8 its cable is led by one, 16 firm; the cable from bit 8 */
+/** flags: 1 pinned, 2 segment to the next node, 4 heavy target, 8 its cable is led by one, 16 firm, 32 its cable is asleep (set on the GPU: see sleepFlags); the cable from bit 8 */
 struct Info { mass: f32, bendK: f32, rest: f32, flags: u32 }
 /** a capsule (a, b, radius a.w) or a box (lo, hi; lo.w = 1), friction b.w */
 struct Static { a: vec4f, b: vec4f, lo: vec4f, hi: vec4f }
@@ -79,7 +83,7 @@ struct Contact {
   anc: vec4f,  // friction anchor, rs (sum of the radii)
   lt: vec4f,   // tangential multiplier, normal multiplier
   k: vec4f,    // stiffness, its ceiling, mu, C at the start of the substep
-  id: vec4u,   // segment b (NONE: a static shape), key, M/(h·h_ref) of the contact (its bits), static shape | tracked << 31
+  id: vec4u,   // segment b (NONE: a static shape), key, M/(h·h_ref) of the contact (its bits), static shape | DORMANT | tracked << 31
   dv: vec4f,   // scratch of the velocity pass
 }
 @group(1) @binding(0) var<uniform> ps: Pass;
@@ -87,14 +91,22 @@ fn outerProduct(u: vec3f, v: vec3f) -> mat3x3f { return mat3x3f(u * v.x, u * v.y
 
 const NONE = 0xffffffffu;
 const MS = ${MS}u; const MC = ${MC}u; const M = ${M}u; const MH = ${MH}u; const REF = ${REF}u;
-const COLORS = ${COLORS}u; const MA = ${MA}u;
+const COLORS = ${COLORS}u; const MA = ${MA}u; const ASLEEP = ${ASLEEP}u;
+/** cable states (cables[c].z): asleep; moved this frame; its sleep window starts again; it fell asleep this frame */
+const SLEEPS = 1u; const MOVED = 2u; const RESTART = 4u; const SETTLE = 8u;
+/** a contact of sleepers, kept as they fell asleep (see carryDormant) */
+const DORMANT = 1u << 30u;
+/** in \`found\`, after the list and the indirect arguments: whether cable c is to wake at the end of the frame */
+fn wakeAt(c: u32) -> u32 { return 7u + P.n * M + c; }
 const PARALLEL = 0.06; const OVERLAP = 0.05; const DIP = 5e-4; const EDGE = 0.05;
 `;
 
 /** helpers that read the nodes (pos, info) */
 const NODES = /* wgsl */ `
 fn flags(i: u32) -> u32 { return info[i].flags; }
-fn fixedNode(i: u32) -> bool { return (info[i].flags & 1u) != 0u; }
+/** pinned, or of a sleeping cable: it does not move this frame */
+fn fixedNode(i: u32) -> bool { return (info[i].flags & 33u) != 0u; }
+fn asleepNode(i: u32) -> bool { return (info[i].flags & 32u) != 0u; }
 fn segOK(i: u32) -> bool { return i < P.n && (info[i].flags & 2u) != 0u; }
 fn cableOf(i: u32) -> u32 { return info[i].flags >> 8u; }
 fn cbase() -> u32 { return P.cur * P.n * M; }
@@ -227,6 +239,8 @@ fn segBox(p0: vec3f, p1: vec3f, lo: vec3f, hi: vec3f) -> BoxHit {
   return h;
 }
 fn cellOf(p: vec3f) -> vec3i { return vec3i(floor(p * P.invCell)); }
+/** \`hash\`: the first segment of each bucket (+1), then the next of each segment (+1), then whether a bucket holds a segment that moves */
+fn movingAt(bucket: u32) -> u32 { return P.hashMask + 1u + P.n + bucket; }
 fn bucketOf(c: vec3i) -> u32 {
   return ((bitcast<u32>(c.x) * 73856093u) ^ (bitcast<u32>(c.y) * 19349663u) ^ (bitcast<u32>(c.z) * 83492791u)) & P.hashMask;
 }
@@ -480,7 +494,7 @@ const main = (body: string) => /* wgsl */ `
 export const KERNELS: Record<string, Kernel> = {
   // ---------------------------------------------------------------- contacts, once a frame
 
-  /** every segment into the bucket of its midpoint (a linked list per bucket) */
+  /** every segment into the bucket of its midpoint (a linked list per bucket); the buckets that hold a segment that moves */
   hashInsert: {
     uses: ['P', 'pos', 'info', 'hash'],
     code: NODES + GEOM + main(/* wgsl */ `
@@ -489,6 +503,7 @@ export const KERNELS: Record<string, Kernel> = {
       let b = bucketOf(cellOf(0.5 * (pos[a].xyz + pos[a + 1u].xyz)));
       let old = atomicExchange(&hash[b], a + 1u);
       atomicStore(&hash[P.hashMask + 1u + a], old);
+      if (!(fixedNode(a) && fixedNode(a + 1u)) && atomicLoad(&hash[movingAt(b)]) == 0u) { atomicStore(&hash[movingAt(b)], 1u); }
     `),
   },
 
@@ -558,8 +573,13 @@ fn push(which: u32, b: u32, s: f32, t: f32, n: vec3f, q: vec3f, rs: f32, mu: f32
     c.lt = vec4f(0.0);
     c.anc = vec4f(relOf(a, b, s, t), rs);
   }
-  if (b == NONE) {
-    if (nstat < MS) { contacts[cbase() + a * M + nstat] = c; nstat++; } else { overflow[0]++; }
+  keep(c);
+}
+
+/** contact c into a slot of segment segA */
+fn keep(c: Contact) {
+  if (c.id.x == NONE) {
+    if (nstat < MS) { contacts[cbase() + segA * M + nstat] = c; nstat++; } else { overflow[0]++; }
   } else {
     if (nloc < MC) { loc[nloc] = c; nloc++; return; }
     // full: the one of the largest key goes, whatever the order they were found in
@@ -569,6 +589,30 @@ fn push(which: u32, b: u32, s: f32, t: f32, n: vec3f, q: vec3f, rs: f32, mu: f32
     if (after(loc[worst], c)) { loc[worst] = c; }
   }
 }
+
+/**
+ * The contacts of a sleeping segment with the static shapes and the other
+ * sleepers, as they were when they fell asleep (see CableSim.dormant): they
+ * are not looked for again, nor solved, but carried from frame to frame in
+ * its slots, so that a cable that wakes starts from the forces that held it
+ * rather than from nothing (it sank into what held it, fast enough to wake
+ * its neighbours, which did the same). Marked DORMANT, out of the list of
+ * contacts found.
+ */
+fn carryDormant(a: u32) {
+  let prev = 1u - P.cur;
+  let rb = prev * P.n * REF + a * REF;
+  let base = prev * P.n * M + a * M;
+  let nS = atomicLoad(&refsA[rb]); let nC = atomicLoad(&refsA[rb + 1u]);
+  for (var k = 0u; k < nS; k++) { var c = contacts[base + k]; c.id.w |= DORMANT; keep(c); }
+  for (var k = 0u; k < nC; k++) {
+    var c = contacts[base + MS + k];
+    if (!asleepNode(c.id.x)) { continue; }
+    c.id.w |= DORMANT;
+    keep(c);
+  }
+}
+fn dormant(c: Contact) -> bool { return (c.id.w & DORMANT) != 0u; }
 
 /** is contact p after contact c in the order of their keys (other segment, then which)? */
 fn after(p: Contact, c: Contact) -> bool { return p.id.x > c.id.x || (p.id.x == c.id.x && p.id.y > c.id.y); }
@@ -636,6 +680,8 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
       let va = segSpeed(a);
       let aFixed = fixedNode(a) && fixedNode(a + 1u);
       let ca = cableOf(a);
+      let aSleeps = asleepNode(a);
+      if (aSleeps) { carryDormant(a); }
 
       // --- against the static shapes
       if (!aFixed) {
@@ -680,6 +726,8 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
         for (var oy = -1; oy <= 1; oy++) {
           for (var oz = -1; oz <= 1; oz++) {
             let nc = cell + vec3i(ox, oy, oz);
+            // (a segment that does not move only meets those that do)
+            if (aFixed && atomicLoad(&hash[movingAt(bucketOf(nc))]) == 0u) { continue; }
             var e = atomicLoad(&hash[bucketOf(nc)]);
             loop {
               if (e == 0u) { break; }
@@ -704,6 +752,15 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
               let cl = segSeg(p0, p1, b0, b1);
               let lim = rs + margin;
               if (cl.d2 > lim * lim) { continue; }
+              // a sleeping cable wakes when something moving touches it, or
+              // sinks into it (see wakeSpeed), at the end of the frame
+              if (aFixed != bFixed) {
+                let sleeper = select(b, a, aFixed);
+                let mover = select(va, segSpeed(b), aFixed);
+                if (asleepNode(sleeper) && (mover > P.wakeSpeed || (mover > P.wakeCreep * P.wakeSpeed && sqrt(cl.d2) < rs - P.wakeSink))) {
+                  atomicStore(&foundA[wakeAt(cableOf(sleeper))], 1u);
+                }
+              }
               pairContacts(b, b0, b1, rs, lim, P.muCable, 0u, cl);
             }
           }
@@ -733,13 +790,18 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
       }
       atomicStore(&refsA[rb], nstat);
       atomicStore(&refsA[rb + 1u], nloc);
-      // and into the list of the contacts, for the kernels that run per contact
+      // and into the list of the contacts, for the kernels that run per
+      // contact (not the dormant ones: a sleeper's static contacts all are)
       if (overflow[0] + overflow[1] + overflow[2] > 0u) {
         atomicAdd(&foundA[1], overflow[0]); atomicAdd(&foundA[2], overflow[1]); atomicAdd(&foundA[3], overflow[2]);
       }
-      let at = atomicAdd(&foundA[0], nstat + nloc);
-      for (var i = 0u; i < nstat; i++) { atomicStore(&foundA[4u + at + i], a * M + i); }
-      for (var i = 0u; i < nloc; i++) { atomicStore(&foundA[4u + at + nstat + i], a * M + MS + i); }
+      let live = select(nstat, 0u, aSleeps);
+      var nl = 0u;
+      for (var i = 0u; i < nloc; i++) { if (!dormant(loc[i])) { nl++; } }
+      if (live + nl == 0u) { return; }
+      var at = atomicAdd(&foundA[0], live + nl);
+      for (var i = 0u; i < live; i++) { atomicStore(&foundA[4u + at], a * M + i); at++; }
+      for (var i = 0u; i < nloc; i++) { if (!dormant(loc[i])) { atomicStore(&foundA[4u + at], a * M + MS + i); at++; } }
     `),
   },
 
@@ -753,6 +815,8 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
     code: NODES + main(/* wgsl */ `
       let i = gid;
       if (i >= P.n) { return; }
+      // (a node that does not move is not solved)
+      if (fixedNode(i)) { adj[i] = 0u; return; }
       var n = 0u;
       ${forContacts('i', /* wgsl */ `
         if (n < MA) {
@@ -806,11 +870,13 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
 
   // ---------------------------------------------------------------- colouring
 
+  /** every stretch uncoloured, but those of the sleeping cables: in no colour, they are not solved */
   colorInit: {
-    uses: ['P', 'colors'],
-    code: main(/* wgsl */ `
+    uses: ['P', 'info', 'colors'],
+    code: NODES + main(/* wgsl */ `
       if (gid >= P.nChunks) { return; }
-      colors[${COL.node}u + gid] = NONE;
+      let first = colors[${COL.node}u + 2u * P.nChunks + 2u * gid];
+      colors[${COL.node}u + gid] = select(NONE, ASLEEP, asleepNode(first));
     `),
   },
 
@@ -851,6 +917,7 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
     code: main(/* wgsl */ `
       if (gid >= P.nChunks) { return; }
       var c = atomicLoad(&colorsA[${COL.node}u + gid]);
+      if (c == ASLEEP) { return; }
       if (c == NONE) { atomicAdd(&stats[${STAT.uncoloured}], 1u); c = P.nColors - 1u; } else { atomicMax(&stats[${STAT.maxColor}], c); }
       // (beyond the colours dispatched: in the last one, with what that one holds)
       if (c >= P.nColors) { atomicAdd(&stats[${STAT.clamped}], 1u); c = P.nColors - 1u; }
@@ -882,6 +949,7 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
     code: main(/* wgsl */ `
       if (gid >= P.nChunks) { return; }
       let c = atomicLoad(&colorsA[${COL.node}u + gid]);
+      if (c == ASLEEP) { return; }
       let e = atomicAdd(&colorsA[${COL.fill}u + c], 1u);
       atomicStore(&colorsA[${COL.node}u + P.nChunks + e], gid);
     `),
@@ -893,8 +961,10 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
   contactStart: {
     uses: ['P', 'pos', 'info', 'statics', 'contacts', 'segs', 'found'],
     code: NODES + GEOM + CONTACTS + main(/* wgsl */ `
-      // and per segment, the warm start of its stretch constraint, its error at the start of the substep
-      if (segOK(gid)) {
+      // and per segment, the warm start of its stretch constraint, its error at
+      // the start of the substep (not those of a sleeping cord: it wakes with
+      // the tension it fell asleep with)
+      if (segOK(gid) && !asleepNode(gid)) {
         let m = max(info[gid].mass, info[gid + 1u].mass) * P.mhk;
         var sg = segs[gid];
         sg.x *= P.lamWarmS * P.gamma;
@@ -910,7 +980,7 @@ fn segSpeed(i: u32) -> f32 { if (i + 1u < P.n) { return max(speed(i), speed(i + 
       if ((c.id.w >> 31u) == 1u && (b != NONE || (flags(a) & 24u) != 0u)) {
         // the closest point of the two segments follows them (see CableSim.track)
         var q0: vec3f; var q1: vec3f;
-        if (b != NONE) { q0 = pos[b].xyz; q1 = pos[b + 1u].xyz; } else { let sh = statics[c.id.w & 0x7fffffffu]; q0 = sh.a.xyz; q1 = sh.b.xyz; }
+        if (b != NONE) { q0 = pos[b].xyz; q1 = pos[b + 1u].xyz; } else { let sh = statics[c.id.w & 0x3fffffffu]; q0 = sh.a.xyz; q1 = sh.b.xyz; }
         let p0 = pos[a].xyz; let p1 = pos[a + 1u].xyz;
         let cl = segSeg(p0, p1, q0, q1);
         let ds = cl.s - c.n.w;
@@ -981,14 +1051,14 @@ ${batch(WG)}
     code: NODES + /* wgsl */ `
 fn weight(i: u32) -> f32 {
   let f = flags(i);
-  if ((f & 1u) != 0u) { return 0.0; }
+  if ((f & 33u) != 0u) { return 0.0; }
   if ((f & 4u) != 0u) { return P.handWeight / info[i].mass; }
   return 1.0 / info[i].mass;
 }
 ` + main(/* wgsl */ `
       if (gid >= P.nCables) { return; }
       let cb = cables[gid];
-      if (cb.y < 2u) { return; }
+      if (cb.y < 2u || (cb.z & SLEEPS) != 0u) { return; }
       for (var k = 0u; k < cb.y - 1u; k++) {
         let s = select(cb.x + cb.y - 2u - k, cb.x + k, ps.forward == 1u);
         if (!segOK(s)) { continue; }
@@ -1044,6 +1114,72 @@ fn weight(i: u32) -> f32 {
       let td = P.contactDamping / denom;
       if (!(vn > 0.0 || td > 0.0)) { return; }
       contacts[g].dv = vec4f(imp * n - td * tv, 1.0);
+    `),
+  },
+
+  // ---------------------------------------------------------------- sleep (see CableSim.updateSleep)
+
+  /** start of a frame: the nodes of the sleeping cables are fixed (see CableSim.refreshFixed) */
+  sleepFlags: {
+    uses: ['P', 'info', 'cables'],
+    code: NODES + main(/* wgsl */ `
+      let i = gid;
+      if (i >= P.n) { return; }
+      let f = info[i].flags;
+      info[i].flags = (f & ~32u) | select(0u, 32u, (cables[f >> 8u].z & SLEEPS) != 0u);
+    `),
+  },
+
+  /** end of a frame: a cable awake moved if one of its nodes is further than sleepDist from where its window started (or it is led, or firm) */
+  sleepMoved: {
+    uses: ['P', 'pos', 'info', 'cablesA', 'sleepRef'],
+    code: NODES + main(/* wgsl */ `
+      let i = gid;
+      if (i >= P.n) { return; }
+      let f = info[i].flags;
+      if ((f & 32u) != 0u) { return; }
+      let c = f >> 8u;
+      let d = pos[i].xyz - sleepRef[i].xyz;
+      if ((f & 24u) != 0u || dot(d, d) > P.sleepDist * P.sleepDist) { atomicOr(&cablesA[4u * c + 2u], MOVED); }
+    `),
+  },
+
+  /**
+   * Per cable: one that moved starts its window again; one that did not has
+   * been still for one frame more, and falls asleep after sleepTime; a
+   * sleeper touched hard enough (see detect) wakes.
+   */
+  sleepCable: {
+    uses: ['P', 'cables', 'found', 'stats'],
+    code: main(/* wgsl */ `
+      let c = gid;
+      if (c >= P.nCables) { return; }
+      var cb = cables[c];
+      var calm = bitcast<f32>(cb.w);
+      var st = 0u;
+      if ((cb.z & SLEEPS) != 0u) {
+        if (found[wakeAt(c)] != 0u) { calm = 0.0; } else { st = SLEEPS; }
+      } else {
+        atomicAdd(&stats[${STAT.awake}], 1u);
+        if ((cb.z & MOVED) != 0u) { calm = 0.0; st = RESTART; }
+        else {
+          calm += P.frame;
+          if (calm > P.sleepTime) { st = SLEEPS | SETTLE; }
+        }
+      }
+      cables[c] = vec4u(cb.x, cb.y, st, bitcast<u32>(calm));
+    `),
+  },
+
+  /** per node: where the window of its cable starts again; a node fallen asleep at rest where it lies, as the substeps would find it */
+  sleepNodes: {
+    uses: ['P', 'pos', 'state', 'info', 'cables', 'sleepRef'],
+    code: NODES + main(/* wgsl */ `
+      let i = gid;
+      if (i >= P.n) { return; }
+      let st = cables[cableOf(i)].z;
+      if ((st & RESTART) != 0u) { sleepRef[i] = pos[i]; }
+      if ((st & SETTLE) != 0u) { let x = vec4f(pos[i].xyz, 0.0); state[i] = State(x, x, vec4f(0.0)); }
     `),
   },
 

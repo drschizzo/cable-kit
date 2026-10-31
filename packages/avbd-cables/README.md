@@ -101,9 +101,10 @@ renderer.setAnimationLoop(() => {
 
 - `positions`: a `GPUBuffer`, a `vec4` per node (x, y, z, radius); `cableBuffer`, a `vec4<u32>` per cable (first node, count).
 - `x`, `targetPull(i)`: read back a frame or two late, for the nodes with a target (and `watch`), or all of them with `readAll`; `readPositions()` returns a promise of all of them now.
-- `stats`: contacts, colours, contacts dropped for want of slots, the GPU's time for a step; `profile()` times a step kernel by kernel.
+- `stats`: contacts, cables awake, colours, contacts dropped for want of slots, the GPU's time for a step; `profile()` times a step kernel by kernel.
+- Sleep as on the CPU (`sleepDist`, `sleepTime`, `wakeSpeed`…, with dormant contacts): a heap at rest costs a fraction of what it does falling (2 000 ropes: about 2 ms a frame instead of 50). `cables[c].asleep` is read back with the rest, a frame or two late; `wakeCable(c)` and `wakeAll()` take effect at the next step.
 - Options: `stretch` (nodes per stretch of cord solved in order, 5), `deterministic` (the same result on every run, a little slower on small scenes).
-- Not there yet: sleep (every cable stays awake), straps, pinches, ghosts, holders, `moveNodes`, `teleport`. It pays from a few thousand nodes: at about a thousand, it is no faster than the CPU.
+- Not there yet: straps, pinches, ghosts, holders, `moveNodes`, `teleport`. It pays from a few thousand nodes: at about a thousand, it is no faster than the CPU.
 
 [docs/gpu.md](../../docs/gpu.md) explains how it maps onto the GPU, what it costs and where it differs from `CableSim`.
 

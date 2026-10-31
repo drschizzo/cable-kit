@@ -2,7 +2,8 @@
 // runs in compute shaders (GPUCableSim), and the tubes read its nodes on the
 // GPU (GPUTubeFeed): they never come back to the CPU, which only asks for a
 // step and an image each frame. With ?solver=cpu, the same scene runs on the
-// CPU solver in a worker (as in the `falling` example), to compare.
+// CPU solver in a worker (as in the `falling` example), to compare. On both,
+// the ropes fall asleep once at rest, and the physics costs little more.
 //   ?ropes=  how many (2000), ?solver=cpu, ?stretch= nodes per stretch of cord on the GPU
 
 import * as THREE from 'three/webgpu';
@@ -78,7 +79,7 @@ if (!onCPU) {
   again = () => { sim.build(defs); sim.setStatics(statics); };
   stats = () => {
     const s = sim.stats;
-    return `${sim.n.toLocaleString('en')} nodes · ${s.contacts.toLocaleString('en')} contacts · ${s.colors.length} colours · physics on the GPU ${s.gpuMs.toFixed(1)} ms (CPU ${s.ms.toFixed(2)} ms to ask for it)${s.overflow.some((o) => o > 0) ? ` · ${s.overflow.join('/')} contacts dropped` : ''}`;
+    return `${sim.n.toLocaleString('en')} nodes · ${s.contacts.toLocaleString('en')} contacts · ${s.awake}/${ROPES} awake · ${s.colors.length} colours · physics on the GPU ${s.gpuMs.toFixed(1)} ms (CPU ${s.ms.toFixed(2)} ms to ask for it)${s.overflow.some((o) => o > 0) ? ` · ${s.overflow.join('/')} contacts dropped` : ''}`;
   };
   Object.assign(window, { example: { sim, renderer } });
 } else {

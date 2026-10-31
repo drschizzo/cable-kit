@@ -11,7 +11,9 @@
 //   sim.positions                 // the nodes on the GPU: vec4 (x, y, z, radius) each
 //
 // It reads nothing back unless asked: `targetPull` and `x` are those of a
-// frame or two ago, `readPositions()` a promise of all of them.
+// frame or two ago, `readPositions()` a promise of all of them. Cables fall
+// asleep and wake on the GPU, as in CableSim; `cables[c].asleep` is read
+// back with the rest.
 
 /// <reference types="@webgpu/types" />
 
@@ -36,6 +38,8 @@ export interface GPUSimStats {
   /** stretches left uncoloured after the rounds of the colouring, and stretches of a colour not dispatched: both share the last colour dispatched */
   uncoloured: number;
   clamped: number;
+  /** cables awake */
+  awake: number;
   /** time to encode a frame on the CPU (ms), and the GPU's time for it where the browser can time it */
   ms: number;
   gpuMs: number;
@@ -69,7 +73,7 @@ export class GPUCableSim {
   targetK = new Float64Array(0);
   targetLead = new Float64Array(0);
   targetHeavy = new Uint8Array(0);
-  stats: GPUSimStats = { contacts: 0, colors: [], overflow: [0, 0, 0], uncoloured: 0, clamped: 0, ms: 0, gpuMs: 0 };
+  stats: GPUSimStats = { contacts: 0, colors: [], overflow: [0, 0, 0], uncoloured: 0, clamped: 0, awake: 0, ms: 0, gpuMs: 0 };
   /** frames stepped, and that frame of the last read back */
   frame = 0;
   readFrame = -1;
@@ -82,6 +86,10 @@ export class GPUCableSim {
   private tgtData = new Float32Array(0);
   private infoDirty = [Infinity, -Infinity];
   private tgtDirty = [Infinity, -Infinity];
+  /** cables woken since the last step (all of them: `wakeAll`), and the frame each was last woken for */
+  private toWake = new Set<number>();
+  private wakeEvery = false;
+  private wokeFor = new Int32Array(0);
   private flip = false;
   private cur = 0;
   private hashCells = 0;
@@ -185,6 +193,9 @@ export class GPUCableSim {
     this.targetHeavy = new Uint8Array(N);
     this.firm = new Uint8Array(defs.length);
     this.led = new Uint8Array(defs.length);
+    this.wokeFor = new Int32Array(defs.length);
+    this.toWake.clear();
+    this.wakeEvery = false;
     this.cables = [];
     const bend = new Float64Array(N);
     const starts: number[] = [];
@@ -233,16 +244,19 @@ export class GPUCableSim {
     make('params', 4 * PARAMS.length, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     make('pos', 16 * N);
     make('state', 48 * N);
+    make('sleepRef', 16 * N);
     make('info', 16 * N);
     make('segs', 16 * N);
     make('tgt', 32 * N);
     make('cables', 16 * defs.length);
-    make('hash', 4 * (this.hashCells + N));
+    make('hash', 4 * (2 * this.hashCells + N));
     make('contacts', 2 * N * M * CONTACT_BYTES);
     make('refs', 4 * 2 * N * REF);
     make('colors', 4 * (COL.node + 5 * K + N), S | GPUBufferUsage.INDIRECT);
-    // the contacts found this frame: their count and counters, then their slots, then the indirect arguments of the kernels per contact
-    make('found', 4 * (4 + N * M + 3), S | GPUBufferUsage.INDIRECT);
+    // the contacts found this frame: their count and counters, then their
+    // slots, then the indirect arguments of the kernels per contact, then the
+    // cables to wake
+    make('found', 4 * (4 + N * M + 3 + defs.length), S | GPUBufferUsage.INDIRECT);
     make('adj', 4 * (N + 2 * N * MA));
     make('stats', 4 * STAT.size);
     this.statics = [];
@@ -255,6 +269,7 @@ export class GPUCableSim {
       pos[4 * i + 3] = this.radius[i];
     }
     q.writeBuffer(this.buffers.pos, 0, pos);
+    q.writeBuffer(this.buffers.sleepRef, 0, pos);
     q.writeBuffer(this.buffers.state, 0, state);
     this.infoData = new ArrayBuffer(16 * N);
     const fi = new Float32Array(this.infoData);
@@ -280,6 +295,7 @@ export class GPUCableSim {
     this.statics = shapes;
     this.uploadStatics();
     this.bindAll();
+    this.wakeAll();
   }
 
   private uploadStatics(): void {
@@ -327,6 +343,7 @@ export class GPUCableSim {
     q.writeBuffer(this.buffers.pos, 16 * i, new Float32Array([x, y, z, this.radius[i]]));
     q.writeBuffer(this.buffers.state, 48 * i, new Float32Array([x, y, z, 0, x, y, z, 0, 0, 0, 0, 0]));
     this.setFlags(i);
+    this.wakeCable(this.cableOf[i]);
   }
 
   /** sets the velocity of every node (xyz interleaved, m/s), the nodes where they were built: right after `build` */
@@ -341,6 +358,7 @@ export class GPUCableSim {
   unpin(i: number): void {
     this.pinned[i] = 0;
     this.setFlags(i);
+    this.wakeCable(this.cableOf[i]);
   }
 
   /** leads node i towards (x, y, z), a spring on a leash (see CableSim.setTarget) */
@@ -350,6 +368,7 @@ export class GPUCableSim {
     this.targetLead[i] = lead;
     this.targetHeavy[i] = heavy ? 1 : 0;
     this.setFlags(i);
+    this.wakeCable(this.cableOf[i]);
   }
 
   clearTarget(i: number): void {
@@ -359,6 +378,7 @@ export class GPUCableSim {
     this.tgtData[8 * i + 3] = 0;
     this.tgtDirty[0] = Math.min(this.tgtDirty[0], i);
     this.tgtDirty[1] = Math.max(this.tgtDirty[1], i + 1);
+    this.wakeCable(this.cableOf[i]);
   }
 
   /** cable c is drawn by a hand: firmer against the static shapes (see `kCapHeld`) */
@@ -368,9 +388,21 @@ export class GPUCableSim {
     for (let i = cb.start; i < cb.start + cb.count; i++) this.setFlags(i);
   }
 
-  /** no sleep on the GPU: every cable is awake (see docs/gpu.md) */
-  wakeCable(): void {}
-  wakeAll(): void {}
+  /** wakes cable ci, from the next step (`cables[ci].asleep` at once) */
+  wakeCable(ci: number): void {
+    const c = this.cables[ci];
+    c.asleep = false;
+    c.calm = 0;
+    this.toWake.add(ci);
+    this.wokeFor[ci] = this.frame;
+  }
+
+  /** wakes every cable */
+  wakeAll(): void {
+    for (const c of this.cables) { c.asleep = false; c.calm = 0; }
+    this.wakeEvery = true;
+    this.wokeFor.fill(this.frame);
+  }
 
   // ------------------------------------------------------------- reading
 
@@ -423,10 +455,12 @@ export class GPUCableSim {
     const enc = dev.createCommandEncoder();
     const B = this.buffers;
     enc.clearBuffer(B.hash, 0, 4 * this.hashCells);
+    enc.clearBuffer(B.hash, 4 * (this.hashCells + N), 4 * this.hashCells);
     enc.clearBuffer(B.refs, 4 * this.cur * N * REF, 4 * N * REF);
     enc.clearBuffer(B.colors, 0, 4 * COL.node);
     enc.clearBuffer(B.stats);
     enc.clearBuffer(B.found, 0, 16);
+    enc.clearBuffer(B.found, 4 * (7 + N * M), 4 * this.cables.length);
     // one compute pass, timed as a whole; when profiling, one per dispatch, each timed (see `profile`)
     const prof = this.profiling ? { names: [] as string[], set: this.profileSet! } : null;
     const main = prof ? null : enc.beginComputePass(this.query ? { timestampWrites: { querySet: this.query, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {});
@@ -449,6 +483,7 @@ export class GPUCableSim {
     const perContact = (name: string) => go(name, 0, (p) => p.dispatchWorkgroupsIndirect(B.found, 4 * (4 + N * M)));
     const nc = this.cables.length;
     // contacts, colours
+    run('sleepFlags', N);
     run('hashInsert', N);
     run('detect', N);
     run('sortRefs', N);
@@ -478,6 +513,9 @@ export class GPUCableSim {
       perContact('cvImpulse'); run('cvApply', N);
       perContact('cvImpulse'); run('cvApplyRest', N);
     }
+    run('sleepMoved', N);
+    run('sleepCable', nc);
+    run('sleepNodes', N);
     main?.end();
     if (prof) this.readProfile(enc, prof.names);
     this.readBack(enc);
@@ -503,6 +541,7 @@ export class GPUCableSim {
       handWeight: P.handWeight, kCap: P.kCap, kCapCable: P.kCapCable, kCapCableHeld: P.kCapCableHeld, kCapHeld: P.kCapHeld,
       margin: P.margin, marginLead: P.marginLead, marginCap: P.marginCap, marginStatic: P.marginStatic, frame: P.dt,
       invCell: this.invCell, nChunks: this.nChunks, gammaRaw: P.gamma, muCable: P.muCable, muStatic: P.muStatic,
+      sleepDist: P.sleepDist, sleepTime: P.sleepTime, wakeSpeed: P.wakeSpeed, wakeCreep: P.wakeCreep, wakeSink: P.wakeSink,
     };
     const dv = new DataView(this.paramData);
     PARAMS.forEach((p, k) => {
@@ -521,6 +560,11 @@ export class GPUCableSim {
     if (c < d) q.writeBuffer(this.buffers.tgt, 32 * c, this.tgtData, 8 * c, 8 * (d - c));
     this.infoDirty = [Infinity, -Infinity];
     this.tgtDirty = [Infinity, -Infinity];
+    // woken: awake, still for no time (the GPU's state and calm, see sleepCable)
+    if (this.wakeEvery) q.writeBuffer(this.buffers.cables, 0, Uint32Array.from(this.cables.flatMap((cb) => [cb.start, cb.count, 0, 0])));
+    else for (const ci of this.toWake) q.writeBuffer(this.buffers.cables, 16 * ci + 8, new Uint32Array(2));
+    this.toWake.clear();
+    this.wakeEvery = false;
   }
 
   /**
@@ -571,8 +615,8 @@ export class GPUCableSim {
     const N = this.n;
     const nodes: number[] = this.readAll ? [] : [...this.watch];
     if (!this.readAll) for (let i = 0; i < N; i++) if (this.targetK[i] > 0) nodes.push(i);
-    const head = 16 + 4 * STAT.size;
-    const size = head + 16 * (this.readAll ? N : nodes.length);
+    const head = 16 + 4 * STAT.size, nc = this.cables.length;
+    const size = head + 16 * nc + 16 * (this.readAll ? N : nodes.length);
     let buf = this.staging.pop();
     if (buf && buf.size < size) { buf.destroy(); buf = undefined; }
     if (!buf) {
@@ -585,13 +629,15 @@ export class GPUCableSim {
       enc.copyBufferToBuffer(this.queryBuffer, 0, buf, 0, 16);
     }
     enc.copyBufferToBuffer(this.buffers.stats, 0, buf, 16, 4 * STAT.size);
-    if (this.readAll) enc.copyBufferToBuffer(this.buffers.pos, 0, buf, head, 16 * N);
-    else nodes.forEach((i, k) => enc.copyBufferToBuffer(this.buffers.pos, 16 * i, buf, head + 16 * k, 16));
+    enc.copyBufferToBuffer(this.buffers.cables, 0, buf, head, 16 * nc);
+    const at = head + 16 * nc;
+    if (this.readAll) enc.copyBufferToBuffer(this.buffers.pos, 0, buf, at, 16 * N);
+    else nodes.forEach((i, k) => enc.copyBufferToBuffer(this.buffers.pos, 16 * i, buf, at + 16 * k, 16));
     const frame = this.frame, b = buf, n = this.n;
     this.watched.push(frame);
     this.device.queue.onSubmittedWorkDone().then(() => b.mapAsync(GPUMapMode.READ)).then(() => {
       this.watched.splice(this.watched.indexOf(frame), 1);
-      if (n === this.n && frame > this.readFrame) {
+      if (n === this.n && nc === this.cables.length && frame > this.readFrame) {
         const r = b.getMappedRange();
         if (this.query) { const t = new BigUint64Array(r, 0, 2); this.stats.gpuMs = Number(t[1] - t[0]) / 1e6; }
         const s = new Uint32Array(r, 16, STAT.size);
@@ -599,12 +645,20 @@ export class GPUCableSim {
         this.stats.overflow = [s[STAT.overflowS], s[STAT.overflowC], s[STAT.overflowH]];
         this.stats.uncoloured = s[STAT.uncoloured];
         this.stats.clamped = s[STAT.clamped];
+        this.stats.awake = s[STAT.awake];
+        // (not those woken since: they are awake)
+        const cs = new Uint32Array(r, head, 4 * nc), calm = new Float32Array(r, head, 4 * nc);
+        this.cables.forEach((cb, ci) => {
+          if (frame < this.wokeFor[ci]) return;
+          cb.asleep = (cs[4 * ci + 2] & 1) !== 0;
+          cb.calm = calm[4 * ci + 3];
+        });
         if (!this.deterministic) this.nColors = Math.min(COLORS, Math.max(s[STAT.clamped] > 0 ? this.nColors + 4 : 0, s[STAT.maxColor] + 2, 4));
         const colors = Array.from(s.subarray(STAT.colors, STAT.colors + COLORS));
         let used = 0;
         colors.forEach((c, k) => { if (c > 0) used = k + 1; });
         this.stats.colors = colors.slice(0, used);
-        const p = new Float32Array(r, head);
+        const p = new Float32Array(r, at);
         if (this.readAll) for (let i = 0; i < n; i++) { this.x[3 * i] = p[4 * i]; this.x[3 * i + 1] = p[4 * i + 1]; this.x[3 * i + 2] = p[4 * i + 2]; }
         else nodes.forEach((i, k) => { this.x[3 * i] = p[4 * k]; this.x[3 * i + 1] = p[4 * k + 1]; this.x[3 * i + 2] = p[4 * k + 2]; });
         this.readFrame = frame;

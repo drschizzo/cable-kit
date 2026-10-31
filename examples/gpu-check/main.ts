@@ -68,6 +68,14 @@ interface Scene {
 const held = [0, 0];
 const weight = (s: View) => { let w = 0; for (let i = 0; i < s.n; i++) w += massOf[i] * 9.81; return w; };
 let massOf: ArrayLike<number> = [];
+/** what the scenes below noted along the way, CPU and GPU */
+const noted: Record<string, number>[] = [{}, {}];
+const side = (s: CableSim | GPUCableSim) => (s instanceof CableSim ? 0 : 1);
+/** sleeping cables among the first n (the GPU's as read back: exact on the frames after a wait, see below) */
+const sleeping = (s: CableSim | GPUCableSim, n: number) => s.cables.slice(0, n).filter((c) => c.asleep).length;
+const PILE = 12;
+/** heights of the nodes when they were woken, CPU and GPU */
+const ys: number[][] = [[], []];
 
 const scenes: Scene[] = [
   {
@@ -121,6 +129,51 @@ const scenes: Scene[] = [
     setup: (s) => s.setTarget(0, 0, 2, 0, 2, 1),
     frame: (s, f) => { if (f >= 300) held[s instanceof CableSim ? 0 : 1] += s.targetPull(0) / 60; },
     measures: [['pull / weight', (s) => held[s.gpu ? 1 : 0] / weight(s), '≈ 1 (± 5 %)', (v) => Math.abs(v - 1) < 0.05]],
+  },
+  {
+    // the heap falls asleep; a cord let go above it wakes those it lands on,
+    // which rest on the sleepers below as on the floor, then all sleep again
+    name: 'a heap asleep, woken by a cord dropped on it (10 s)', statics: [floor], seconds: 10,
+    defs: [
+      ...Array.from({ length: PILE }, (_, k) => { const a = (k * Math.PI) / PILE, c = Math.cos(a) * 0.25, s = Math.sin(a) * 0.25; return { points: cord([-c, 0.02 + 0.02 * k, -s], [c, 0.02 + 0.02 * k, s]), ...PATCH }; }),
+      { points: cord([-0.2, 0.35, 0.03], [0.2, 0.35, 0.03]), ...PATCH },
+    ],
+    // (from 0.5 m, it sinks 3.7 mm into the sleepers, on the CPU as on the GPU: 0.7 mm if they are awake)
+    setup: (s) => { s.pin(s.cables[PILE].start, -0.2, 0.35, 0.03); s.pin(s.n - 1, 0.2, 0.35, 0.03); },
+    // (on the frames after a wait for the GPU: 30, 60, …)
+    frame: (s, f) => {
+      const o = noted[side(s)];
+      if (f === 0) { o.before = 0; o.woken = 0; }
+      if (f === 240) { o.before = sleeping(s, PILE); s.unpin(s.cables[PILE].start); s.unpin(s.n - 1); }
+      if (f > 240 && f % 30 === 0) o.woken = Math.max(o.woken, PILE - sleeping(s, PILE));
+      if (f === 570) o.after = sleeping(s, PILE + 1);
+    },
+    measures: [
+      ['asleep before the drop (of 12)', (s) => noted[s.gpu ? 1 : 0].before, '12', (v) => v === PILE],
+      ['woken by it, at most', (s) => noted[s.gpu ? 1 : 0].woken, '≥ 1', (v) => v >= 1],
+      ['asleep at the end (of 13)', (s) => noted[s.gpu ? 1 : 0].after, '≥ 11', (v) => v >= 11],
+      ['overlap (mm)', (s) => 1000 * overlap(s), '< 0.5', (v) => v < 0.5],
+      ['lowest (mm)', (s) => 1000 * lowest(s), `> ${1000 * (R - 0.001)}`, (v) => v > 1000 * (R - 0.001)],
+      ['stretch %', (s) => 100 * stretch(s), '< 1', (v) => v < 1],
+    ],
+  },
+  {
+    // woken, the cords start from the contacts they fell asleep on (see
+    // CableSim.dormant): from nothing, they sink into one another first
+    name: 'a pile asleep, all woken', statics: [floor], seconds: 4,
+    defs: Array.from({ length: 6 }, (_, k) => { const a = (k * Math.PI) / 6, c = Math.cos(a) * 0.25, s = Math.sin(a) * 0.25; return { points: cord([-c, 0.02 + 0.03 * k, -s], [c, 0.02 + 0.03 * k, s]), ...PATCH }; }),
+    // (the GPU's positions read back every frame, a frame or two late: over a second)
+    setup: (s) => { if (s instanceof GPUCableSim) s.readAll = true; },
+    frame: (s, f) => {
+      const o = noted[side(s)];
+      if (f === 180) { o.asleep = sleeping(s, 6); o.dip = 0; ys[side(s)] = Array.from({ length: s.n }, (_, i) => s.x[3 * i + 1]); s.wakeAll(); }
+      if (f > 180 && f <= 240) for (let i = 0; i < s.n; i++) o.dip = Math.max(o.dip, ys[side(s)][i] - s.x[3 * i + 1]);
+    },
+    measures: [
+      ['asleep before (of 6)', (s) => noted[s.gpu ? 1 : 0].asleep, '6', (v) => v === 6],
+      ['sinks on waking (mm)', (s) => 1000 * noted[s.gpu ? 1 : 0].dip, '< 0.5', (v) => v < 0.5],
+      ['overlap (mm)', (s) => 1000 * overlap(s), '< 0.5', (v) => v < 0.5],
+    ],
   },
   {
     name: 'a hundred cords in a heap (10 s)', params: CABLES.patchCord.params, statics: [{ kind: 'box', min: [-3, -0.1, -3], max: [3, 0, 3] }], seconds: 10,
