@@ -174,6 +174,13 @@ export interface SimParams {
   marginCap: number;
   /** same ceiling against the static shapes, whose contacts are few and cheap */
   marginStatic: number;
+  /**
+   * The size of the cells the static shapes are filed in (m): a segment only
+   * tests the shapes of its cell. Smaller cells hold fewer shapes each; a
+   * large shape takes many of them, and filing it takes as long (each time
+   * `setStatics` is called). The contacts found are the same whatever the size.
+   */
+  staticCell: number;
   /** clamp of one block solve's displacement (m) */
   maxMove: number;
   /**
@@ -220,7 +227,7 @@ export function defaultSimParams(p: Partial<SimParams> = {}): SimParams {
     dt: 1 / 60, substeps: 3, refSubsteps: 3, iterations: 6, gravity: -9.81,
     stretch: 10, kMin: 0.05, kCap: 2, kCapCable: 2, kCapCableHeld: 4, kCapHeld: 8, beta: 2000, gamma: 0.9, alpha: 0.25, alphaS: 0.3, lamWarm: 0.8, lamWarmS: 0.4, contactDamping: 0.3, restFriction: 0.012,
     muCable: 0.3, muStatic: 0.4, drag: 2.5,
-    margin: 0.0015, marginLead: 1.2, marginCap: 0.008, marginStatic: 0.06, maxMove: 0.012,
+    margin: 0.0015, marginLead: 1.2, marginCap: 0.008, marginStatic: 0.06, staticCell: 0.05, maxMove: 0.012,
     handWeight: 0.1, pbdPasses: 4, maxDepen: 0.001, frictionK: 0.3,
     sleepDist: 0.006, sleepTime: 0.5, wakeSpeed: 0.1, wakeCreep: 0.2, wakeSink: 0.002, strapK: 0.3,
     pinchK: 6, ghostFrames: 90,
@@ -275,7 +282,7 @@ export class CableSim {
    * computed before are out of date.
    */
   static mirrored: readonly string[] = [
-    'setStatics', 'moveNodes', 'teleport', 'pin', 'unpin', 'setTarget', 'clearTarget',
+    'setStatics', 'updateStatic', 'moveNodes', 'teleport', 'pin', 'unpin', 'setTarget', 'clearTarget',
     'firmPinch', 'unpinch', 'setPinches', 'loadPinches', 'addBundle', 'removeBundle',
   ];
   static restarts: readonly string[] = ['moveNodes', 'teleport'];
@@ -414,9 +421,10 @@ export class CableSim {
   /** cables with a heavy target this step: they do not fall asleep */
   private led = new Uint8Array(0);
   private staticGrid = new Map<number, number[]>();
+  /** how far beyond its bounds a static shape is filed: the reach of a segment, and the static margin */
+  private staticPad = 0;
   /** bounds of each static shape, min then max (6 per shape), for a cheap rejection before the exact test */
   private staticBounds = new Float64Array(0);
-  private readonly SCELL = 0.05;
 
   /**
    * Targets: a node led towards a point by a spring on a leash (see
@@ -595,32 +603,68 @@ export class CableSim {
     // half a segment, a radius and the static margin (2 cm at least for the first two)
     let reach = 0.02;
     for (let i = 0; i < this.n; i++) if (this.segOK[i]) reach = Math.max(reach, 0.5 * this.rest[i] + this.radius[i]);
-    const pad = reach + this.P.marginStatic;
-    const C = this.SCELL;
+    this.staticPad = reach + this.P.marginStatic;
     this.staticBounds = new Float64Array(6 * shapes.length);
-    shapes.forEach((s, id) => {
-      let x0: number, y0: number, z0: number, x1: number, y1: number, z1: number;
-      if (s.kind === 'capsule') {
-        x0 = Math.min(s.ax, s.bx) - s.r; x1 = Math.max(s.ax, s.bx) + s.r;
-        y0 = Math.min(s.ay, s.by) - s.r; y1 = Math.max(s.ay, s.by) + s.r;
-        z0 = Math.min(s.az, s.bz) - s.r; z1 = Math.max(s.az, s.bz) + s.r;
-      } else {
-        [x0, y0, z0] = s.min; [x1, y1, z1] = s.max;
-      }
-      this.staticBounds.set([x0, y0, z0, x1, y1, z1], 6 * id);
-      const ix0 = Math.floor((x0 - pad) / C), ix1 = Math.floor((x1 + pad) / C);
-      const iy0 = Math.floor((y0 - pad) / C), iy1 = Math.floor((y1 + pad) / C);
-      const iz0 = Math.floor((z0 - pad) / C), iz1 = Math.floor((z1 + pad) / C);
-      for (let ix = ix0; ix <= ix1; ix++)
-        for (let iy = iy0; iy <= iy1; iy++)
-          for (let iz = iz0; iz <= iz1; iz++) {
-            const key = cellKey(ix, iy, iz);
-            let list = this.staticGrid.get(key);
-            if (!list) { list = []; this.staticGrid.set(key, list); }
-            list.push(id);
-          }
-    });
+    shapes.forEach((_, id) => this.fileStatic(id));
     this.wakeAll();
+  }
+
+  /**
+   * Static shape `id` (of those given to `setStatics`) becomes `shape` (it
+   * moved, or changed): it is filed again where it is now, and the cables
+   * near where it was or where it is now wake, not all of them as with
+   * `setStatics`. A shape that moves every frame (a bar that slides)
+   * costs that, and the cables away from it sleep on. It pushes the cables
+   * it meets, but does not carry them along by friction: it has no speed.
+   */
+  updateStatic(id: number, shape: StaticShape): void {
+    this.statics[id] = shape;
+    const B = this.staticBounds, o = 6 * id, was = B.slice(o, o + 6);
+    this.staticCells(was, (key) => {
+      const list = this.staticGrid.get(key), k = list ? list.indexOf(id) : -1;
+      if (k >= 0) list!.splice(k, 1);
+    });
+    this.fileStatic(id);
+    const x = this.x, pad = this.staticPad;
+    const near = (b: ArrayLike<number>, i: number) =>
+      x[3 * i] > b[0] - pad && x[3 * i] < b[3] + pad && x[3 * i + 1] > b[1] - pad && x[3 * i + 1] < b[4] + pad && x[3 * i + 2] > b[2] - pad && x[3 * i + 2] < b[5] + pad;
+    for (let i = 0; i < this.n; i++) {
+      const c = this.cableOf[i];
+      if (this.cables[c].asleep && (near(was, i) || near(B.subarray(o, o + 6), i))) this.wakeCable(c);
+    }
+  }
+
+  /** files static shape `id` in the cells its bounds (grown by the reach of a segment) cover, its bounds kept for a cheap rejection */
+  private fileStatic(id: number): void {
+    const s = this.statics[id];
+    let x0: number, y0: number, z0: number, x1: number, y1: number, z1: number;
+    if (s.kind === 'capsule') {
+      x0 = Math.min(s.ax, s.bx) - s.r; x1 = Math.max(s.ax, s.bx) + s.r;
+      y0 = Math.min(s.ay, s.by) - s.r; y1 = Math.max(s.ay, s.by) + s.r;
+      z0 = Math.min(s.az, s.bz) - s.r; z1 = Math.max(s.az, s.bz) + s.r;
+    } else {
+      [x0, y0, z0] = s.min; [x1, y1, z1] = s.max;
+    }
+    this.staticBounds.set([x0, y0, z0, x1, y1, z1], 6 * id);
+    this.staticCells(this.staticBounds.subarray(6 * id, 6 * id + 6), (key) => {
+      let list = this.staticGrid.get(key);
+      if (!list) { list = []; this.staticGrid.set(key, list); }
+      // in order of id, as `setStatics` files them: the contacts are found in the same order
+      let k = list.length;
+      while (k > 0 && list[k - 1] > id) k--;
+      list.splice(k, 0, id);
+    });
+  }
+
+  /** the key of each cell bounds b (min then max) cover, grown by the reach of a segment */
+  private staticCells(b: ArrayLike<number>, f: (key: number) => void): void {
+    const pad = this.staticPad, C = this.P.staticCell;
+    const ix0 = Math.floor((b[0] - pad) / C), ix1 = Math.floor((b[3] + pad) / C);
+    const iy0 = Math.floor((b[1] - pad) / C), iy1 = Math.floor((b[4] + pad) / C);
+    const iz0 = Math.floor((b[2] - pad) / C), iz1 = Math.floor((b[5] + pad) / C);
+    for (let ix = ix0; ix <= ix1; ix++)
+      for (let iy = iy0; iy <= iy1; iy++)
+        for (let iz = iz0; iz <= iz1; iz++) f(cellKey(ix, iy, iz));
   }
 
   // ------------------------------------------------------------- control
@@ -1779,7 +1823,7 @@ export class CableSim {
     this.clearGhosts();
 
     // --- cable vs static shapes
-    const SC = this.SCELL;
+    const SC = this.P.staticCell;
     for (let a = 0; a < N; a++) {
       if (!this.segOK[a]) continue;
       if (this.fixed[a] && this.fixed[a + 1]) continue;

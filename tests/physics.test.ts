@@ -285,4 +285,19 @@ describe('cable solver', () => {
     expect(Math.abs(pull - weight) / weight).toBeLessThan(0.05);
     expect(f.y).toBeGreaterThan(0.95 * Math.hypot(f.x, f.y, f.z));
   });
+  it('a rod moved alone carries the cord across it, and a cord away from it sleeps on', () => {
+    const sim = new CableSim();
+    sim.build([{ points: cord([-0.2, 0.1, 0], [0.2, 0.1, 0]), ...PATCH }, { points: cord([1.8, 0.02, 0], [2.2, 0.02, 0]), ...PATCH }]);
+    const rod: StaticShape = { kind: 'capsule', ax: 0, ay: 0, az: -0.2, bx: 0, by: 0, bz: 0.2, r: 0.01 };
+    sim.setStatics([{ kind: 'box', min: [-3, -1, -1], max: [3, -0.5, 1] }, rod, { kind: 'box', min: [1, -0.1, -1], max: [3, 0, 1] }]);
+    run(sim, 3);
+    expect(sim.cables.every((c) => c.asleep)).toBe(true);
+    // the rod rises 10 cm, a millimetre a frame
+    for (let k = 1; k <= 100; k++) { sim.updateStatic(1, { ...rod, ay: k * 0.001, by: k * 0.001 }); sim.step(); }
+    run(sim, 1);
+    const mid = sim.cables[0].count >> 1;
+    expect(sim.x[3 * mid + 1]).toBeGreaterThan(0.1);
+    expect(sim.cables[1].asleep).toBe(true);
+    expect(stretch(sim)).toBeLessThan(0.01);
+  });
 });
