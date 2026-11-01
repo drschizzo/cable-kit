@@ -3,7 +3,7 @@
 // as tube.ts, which does it for WebGLRenderer in GLSL. WebGPURenderer runs it
 // on WebGPU, or on WebGL 2 where there is none.
 //
-//   import { TubeMesh, TubeNodes, tubeCoord, tubeTint } from '@drschizzo/three-cable-tubes/webgpu';
+//   import { TubeMesh, TubeNodes, tubeCoord, tubeTint, tubeWear } from '@drschizzo/three-cable-tubes/webgpu';
 //   const nodes = new TubeNodes(nodeCount);
 //   const material = new THREE.MeshStandardNodeMaterial();
 //   material.emissiveNode = tubeTint;                 // the glow of the nodes
@@ -11,8 +11,9 @@
 //
 // Any node material draws them: the mesh sets its `positionNode`, which also
 // sets the normal. `tubeCoord` (where the fragment is along the cord at rest,
-// cos and sin of its angle round it, the cord's tag) and `tubeTint` are
-// varyings its other nodes may read. The shadows and the passes of the post
+// cos and sin of its angle round it, the cord's tag), `tubeTint` and
+// `tubeWear` (how worn the cord is there, see `TubeNodes.wear`) and
+// `tubeRadius` are varyings its other nodes may read. The shadows and the passes of the post
 // processing draw the same material, so nothing else needs it.
 //
 // The nodes may also be computed on the GPU, and never leave it: a compute
@@ -30,6 +31,10 @@ export { TubeNodes, TubeSync, type CableSource, type TubeOptions } from './share
 export const tubeCoord = varyingProperty('vec4', 'tubeCoord');
 /** the glow of the node a fragment is nearest to (linear RGB) */
 export const tubeTint = varyingProperty('vec3', 'tubeTint');
+/** how worn the cord is where the fragment is, 0 to 1, from its two nodes (`TubeNodes.wear`) */
+export const tubeWear = varyingProperty('float', 'tubeWear');
+/** the radius of the tube where the fragment is (m) */
+export const tubeRadius = varyingProperty('float', 'tubeRadius');
 
 // (three's TSL types reject the mixes of int and float the shader needs: it is checked when it compiles)
 const {
@@ -389,6 +394,8 @@ export class TubeMesh extends THREE.Mesh {
       normalLocal.assign(nrm);
       tubeCoord.assign(vec4(a.x.add(u.mul(a.y)), cos(ang), sin(ang), a.z));
       tubeTint.assign(at(select(u.lessThan(0.5), i1, i2).mul(PER).add(2)).xyz);
+      tubeWear.assign(mix(at(i1.mul(PER).add(1)).w, at(i2.mul(PER).add(1)).w, u));
+      tubeRadius.assign(end.w);
       return centre.add(off.mul(end.w));
     })();
   }

@@ -21,8 +21,9 @@
 // contact or a taut cord keeps its force instead of rebuilding it by sinking.
 // Soft energies: bending (second difference), the targets (a node led towards
 // a point by a spring on a leash: `setTarget`), the straps and the
-// pinches. A node may pass through the other cords (`ghost`: never through the
-// static shapes), and becomes solid again where it is clear of them.
+// pinches. A node may pass through the cords (`ghost`: the others, and its own
+// cord away from it, never the static shapes), and becomes solid again where
+// it is clear of them.
 //
 // A pinch keeps the shape a few nodes had when it was made: each
 // node is pulled towards where it was in that shape, the shape turned and
@@ -452,7 +453,7 @@ export class CableSim {
   pinchHeld: Pinch | null = null;
   protected pinchChanged = false;
 
-  /** a node that passes through the other cords: −1 while it does, then the frames left until it is solid again (0: solid) */
+  /** a node that passes through the cords (the others, its own beyond its neighbours): −1 while it does, then the frames left until it is solid again (0: solid) */
   ghost: Int16Array = new Int16Array(0);
   /** segments a ghost overlapped another cord at this frame */
   private ghostTouch = new Uint8Array(0);
@@ -1790,8 +1791,8 @@ export class CableSim {
               );
               const lim = rs + margin;
               if (closest.d2 > lim * lim) continue;
-              // a ghost passes through the others
-              if (ca !== cb && (this.ghost[a] || this.ghost[a + 1] || this.ghost[b] || this.ghost[b + 1])) {
+              // a ghost passes through the cords, its own too (a loop of a cord round itself undoes only so)
+              if (this.ghost[a] || this.ghost[a + 1] || this.ghost[b] || this.ghost[b + 1]) {
                 if (closest.d2 < rs * rs) { this.ghostTouch[a] = 1; this.ghostTouch[b] = 1; }
                 continue;
               }
