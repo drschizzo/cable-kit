@@ -29,8 +29,8 @@ export const PER = 3;
 /**
  * The nodes of the tubes, as the GPU reads them: node i is texel 3i (position,
  * radius: 0 hides the tube), 3i + 1 (normal of its frame, parallel-transported
- * from the first node of the cord, so that the rings do not twist) and 3i + 2
- * (the glow of the cord there, linear RGB).
+ * from the first node of the cord, so that the rings do not twist, and how
+ * worn the cord is there) and 3i + 2 (the glow of the cord there, linear RGB).
  */
 export class TubeNodes {
   readonly texture: THREE.DataTexture;
@@ -82,6 +82,12 @@ export class TubeNodes {
   /** hides the tube through these nodes (they keep their place) */
   hide(start: number, n: number): void {
     for (let i = start; i < start + n; i++) this.data[4 * PER * i + 3] = 0;
+    this.texture.needsUpdate = true;
+  }
+
+  /** how worn the cord is at node i, 0 to 1 (what a material makes of it: see `tubeWear`); sent with the next frame */
+  wear(i: number, v: number): void {
+    this.data[4 * PER * i + 7] = v;
     this.texture.needsUpdate = true;
   }
 

@@ -35,9 +35,10 @@
 //
 // Any material draws them: its vertex shader sees `position` and `normal` as
 // the point of the tube, and two values of its own, `tubeCoord` (where the
-// vertex is along the cord at rest and round it, and the cord's tag) and
-// `tubeTint` (the glow of the nearest node). `aliases` gives them other names
-// too, for materials written for other geometry.
+// vertex is along the cord at rest and round it, and the cord's tag),
+// `tubeTint` (the glow of the nearest node) and `tubeWear` (how worn the cord
+// is there, between its two nodes). `aliases` gives them other names too, for
+// materials written for other geometry.
 
 import * as THREE from 'three';
 import { PER, W, resolve, stretch, type TubeNodes, type TubeOptions } from './shared.js';
@@ -96,6 +97,7 @@ vec4 tubeAt(int k) { return texelFetch(tubeNodes, ivec2(k % ${W}, k / ${W}), 0);
   vec3 tubePos = tCentre + tOff * tEnd.w;
   vec4 tubeCoord = vec4(tubeArc.x + tU * tubeArc.y, cos(tAng), sin(tAng), tubeArc.z);
   vec3 tubeTint = tubeAt(${PER} * (tU < 0.5 ? tI1 : tI2) + 2).rgb;
+  float tubeWear = mix(tubeAt(${PER} * tI1 + 1).w, tubeAt(${PER} * tI2 + 1).w, tU);
 #define position tubePos
 #define normal tubeNormal
 ${aliases}
